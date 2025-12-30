@@ -54,8 +54,17 @@ elseif (APPLE)
 elseif(ANDROID)
    add_subdirectory(Android)
 else()
-    # TODO: Check for other GUI frameworks here when we move them in-tree
-    return()
+    # Check for GNUstep on non-Apple systems
+    find_package(PkgConfig)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(GNUSTEP gnustep-base gnustep-gui)
+    endif()
+    if(GNUSTEP_FOUND)
+        add_subdirectory(AppKit)
+    else()
+        # TODO: Check for other GUI frameworks here when we move them in-tree
+        return()
+    endif()
 endif()
 
 if (NOT TARGET ladybird)
