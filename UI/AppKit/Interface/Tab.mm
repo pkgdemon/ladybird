@@ -14,6 +14,7 @@
 #import <Interface/SearchPanel.h>
 #import <Interface/Tab.h>
 #import <Interface/TabController.h>
+#import <Platform.h>
 #import <Utilities/Conversions.h>
 
 #if !__has_feature(objc_arc)
@@ -22,6 +23,7 @@
 
 static constexpr CGFloat const WINDOW_WIDTH = 1000;
 static constexpr CGFloat const WINDOW_HEIGHT = 800;
+static constexpr CGFloat const SEARCH_PANEL_HEIGHT = 30;
 
 @interface Tab () <LadybirdWebViewObserver>
 
@@ -85,6 +87,7 @@ static constexpr CGFloat const WINDOW_HEIGHT = 800;
         self.search_panel = [[SearchPanel alloc] init];
         [self.search_panel setHidden:YES];
 
+#if LADYBIRD_HAS_STACKVIEW
         auto* stack_view = [NSStackView stackViewWithViews:@[
             self.search_panel,
             self.web_view,
@@ -96,10 +99,49 @@ static constexpr CGFloat const WINDOW_HEIGHT = 800;
         [self setContentView:stack_view];
 
         [[self.search_panel leadingAnchor] constraintEqualToAnchor:[self.contentView leadingAnchor]].active = YES;
+#else
+        // GNUstep: Use manual layout with a container view
+        auto* container_view = [[NSView alloc] initWithFrame:window_rect];
+        [container_view setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+
+        [self.search_panel setAutoresizingMask:NSViewWidthSizable | NSViewMinYMargin];
+        [self.web_view setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+
+        [container_view addSubview:self.search_panel];
+        [container_view addSubview:self.web_view];
+
+        [self setContentView:container_view];
+        [self layoutContentViews];
+#endif
     }
 
     return self;
 }
+
+#if !LADYBIRD_HAS_STACKVIEW
+- (void)layoutContentViews
+{
+    auto content_rect = [[self contentView] bounds];
+    BOOL search_visible = ![self.search_panel isHidden];
+
+    if (search_visible) {
+        // Search panel at top
+        [self.search_panel setFrame:NSMakeRect(0, content_rect.size.height - SEARCH_PANEL_HEIGHT,
+                                               content_rect.size.width, SEARCH_PANEL_HEIGHT)];
+        // Web view fills remaining space
+        [self.web_view setFrame:NSMakeRect(0, 0, content_rect.size.width,
+                                           content_rect.size.height - SEARCH_PANEL_HEIGHT)];
+    } else {
+        // Web view fills entire content area
+        [self.web_view setFrame:content_rect];
+    }
+}
+
+- (void)windowDidResize:(NSNotification*)notification
+{
+    [self layoutContentViews];
+}
+#endif
 
 #pragma mark - Public methods
 

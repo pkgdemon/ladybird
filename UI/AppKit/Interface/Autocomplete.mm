@@ -20,6 +20,9 @@ static constexpr auto POPOVER_PADDING = 6uz;
 @property (nonatomic, weak) NSToolbarItem* toolbar_item;
 
 @property (nonatomic, strong) NSTableView* table_view;
+#if !LADYBIRD_HAS_POPOVER
+@property (nonatomic, strong) NSView* content_view;
+#endif
 
 @end
 
@@ -28,7 +31,18 @@ static constexpr auto POPOVER_PADDING = 6uz;
 - (instancetype)init:(id<AutocompleteObserver>)observer
      withToolbarItem:(NSToolbarItem*)toolbar_item
 {
+#if LADYBIRD_HAS_POPOVER
     if (self = [super init]) {
+#else
+    auto initial_frame = NSMakeRect(0, 0, 200, 200);
+    if (self = [super initWithContentRect:initial_frame
+                                styleMask:NSWindowStyleMaskBorderless
+                                  backing:NSBackingStoreBuffered
+                                    defer:YES]) {
+        [self setFloatingPanel:YES];
+        [self setBecomesKeyOnlyIfNeeded:YES];
+        [self setHidesOnDeactivate:YES];
+#endif
         self.observer = observer;
         self.toolbar_item = toolbar_item;
 
@@ -52,6 +66,7 @@ static constexpr auto POPOVER_PADDING = 6uz;
         [scroll_view setDocumentView:self.table_view];
         [scroll_view setDrawsBackground:NO];
 
+#if LADYBIRD_HAS_POPOVER
         auto* content_view = [[NSView alloc] init];
         [content_view addSubview:scroll_view];
 
@@ -62,6 +77,11 @@ static constexpr auto POPOVER_PADDING = 6uz;
         [self setBehavior:NSPopoverBehaviorTransient];
         [self setContentViewController:controller];
         [self setValue:[NSNumber numberWithBool:YES] forKeyPath:@"shouldHideAnchor"];
+#else
+        self.content_view = [[NSView alloc] initWithFrame:initial_frame];
+        [self.content_view addSubview:scroll_view];
+        [self setContentView:self.content_view];
+#endif
     }
 
     return self;
@@ -83,16 +103,30 @@ static constexpr auto POPOVER_PADDING = 6uz;
 
 - (BOOL)close
 {
+#if LADYBIRD_HAS_POPOVER
     if (!self.isShown)
         return NO;
-
     [super close];
+#else
+    if (![self isVisible])
+        return NO;
+    [self orderOut:nil];
+#endif
     return YES;
+}
+
+- (BOOL)isCurrentlyShown
+{
+#if LADYBIRD_HAS_POPOVER
+    return self.isShown;
+#else
+    return [self isVisible];
+#endif
 }
 
 - (Optional<String>)selectedSuggestion
 {
-    if (!self.isShown || self.table_view.numberOfRows == 0)
+    if (![self isCurrentlyShown] || self.table_view.numberOfRows == 0)
         return {};
 
     auto row = [self.table_view selectedRow];
@@ -107,7 +141,7 @@ static constexpr auto POPOVER_PADDING = 6uz;
     if (self.table_view.numberOfRows == 0)
         return NO;
 
-    if (!self.isShown) {
+    if (![self isCurrentlyShown]) {
         [self show];
         return YES;
     }
@@ -121,7 +155,7 @@ static constexpr auto POPOVER_PADDING = 6uz;
     if (self.table_view.numberOfRows == 0)
         return NO;
 
-    if (!self.isShown) {
+    if (![self isCurrentlyShown]) {
         [self show];
         return YES;
     }
@@ -144,19 +178,28 @@ static constexpr auto POPOVER_PADDING = 6uz;
     auto frame = NSMakeRect(0, 0, [[self.toolbar_item view] frame].size.width, height);
 
     [self.table_view.enclosingScrollView setFrame:NSInsetRect(frame, 0, POPOVER_PADDING)];
-    [self setContentSize:frame.size];
 
     [self.table_view deselectAll:nil];
     [self.table_view scrollRowToVisible:0];
 
-    [self showRelativeToToolbarItem:self.toolbar_item];
-
     auto* window = [self.toolbar_item.view window];
     auto* first_responder = [window firstResponder];
 
+#if LADYBIRD_HAS_POPOVER
+    [self setContentSize:frame.size];
+    [self showRelativeToToolbarItem:self.toolbar_item];
     [self showRelativeToRect:self.toolbar_item.view.frame
                       ofView:self.toolbar_item.view
                preferredEdge:NSRectEdgeMaxY];
+#else
+    // GNUstep: Position the panel below the toolbar item
+    auto toolbar_frame = [[self.toolbar_item view] convertRect:[[self.toolbar_item view] bounds] toView:nil];
+    auto screen_origin = [window convertRectToScreen:toolbar_frame].origin;
+    auto panel_frame = NSMakeRect(screen_origin.x, screen_origin.y - frame.size.height, frame.size.width, frame.size.height);
+    [self setFrame:panel_frame display:YES];
+    [self.content_view setFrame:NSMakeRect(0, 0, frame.size.width, frame.size.height)];
+    [self orderFront:nil];
+#endif
 
     if (first_responder)
         [window makeFirstResponder:first_responder];

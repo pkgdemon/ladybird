@@ -16,9 +16,13 @@
 #include <LibThreading/RWLock.h>
 
 #import <Cocoa/Cocoa.h>
-#import <CoreFoundation/CoreFoundation.h>
 
-#include <sys/event.h>
+#if LADYBIRD_APPLE
+#    import <CoreFoundation/CoreFoundation.h>
+#    include <sys/event.h>
+#endif
+
+#include <signal.h>
 #include <sys/time.h>
 #include <sys/types.h>
 
@@ -56,12 +60,21 @@ struct ThreadData {
     }
 
     IDAllocator timer_id_allocator;
+#if LADYBIRD_APPLE
     HashMap<int, CFRunLoopTimerRef> timers;
     struct NotifierState {
         CFSocketRef socket { nullptr };
         CFRunLoopSourceRef source { nullptr };
         CFRunLoopRef run_loop { nullptr };
     };
+#else
+    // GNUstep: Use NSTimer and NSFileHandle
+    HashMap<int, NSTimer*> timers;
+    struct NotifierState {
+        NSFileHandle* file_handle { nil };
+        id observer { nil };
+    };
+#endif
     HashMap<Core::Notifier*, NotifierState> notifiers;
 };
 
@@ -70,7 +83,11 @@ class SignalHandlers : public RefCounted<SignalHandlers> {
     AK_MAKE_NONMOVABLE(SignalHandlers);
 
 public:
+#if LADYBIRD_APPLE
     SignalHandlers(int signal_number, CFFileDescriptorCallBack);
+#else
+    SignalHandlers(int signal_number);
+#endif
     ~SignalHandlers();
 
     void dispatch();
@@ -105,10 +122,13 @@ public:
     HashMap<int, Function<void(int)>> m_handlers;
     HashMap<int, Function<void(int)>> m_handlers_pending;
     bool m_calling_handlers { false };
+#if LADYBIRD_APPLE
     CFRunLoopSourceRef m_source { nullptr };
     int m_kevent_fd = { -1 };
+#endif
 };
 
+#if LADYBIRD_APPLE
 SignalHandlers::SignalHandlers(int signal_number, CFFileDescriptorCallBack handle_signal)
     : m_signal_number(signal_number)
     , m_original_handler(signal(signal_number, [](int) { }))
@@ -143,6 +163,36 @@ SignalHandlers::~SignalHandlers()
     (void)::signal(m_signal_number, m_original_handler);
     ::close(m_kevent_fd);
 }
+#else
+// GNUstep: Simpler signal handling using sigaction
+static HashMap<int, SignalHandlers*> s_signal_handlers_by_number;
+
+static void gnustep_signal_handler(int signal_number)
+{
+    if (auto* handlers = s_signal_handlers_by_number.get(signal_number).value_or(nullptr)) {
+        handlers->dispatch();
+    }
+}
+
+SignalHandlers::SignalHandlers(int signal_number)
+    : m_signal_number(signal_number)
+    , m_original_handler(signal(signal_number, SIG_DFL))
+{
+    s_signal_handlers_by_number.set(signal_number, this);
+
+    struct sigaction sa;
+    sa.sa_handler = gnustep_signal_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+    sigaction(signal_number, &sa, nullptr);
+}
+
+SignalHandlers::~SignalHandlers()
+{
+    s_signal_handlers_by_number.remove(m_signal_number);
+    (void)::signal(m_signal_number, m_original_handler);
+}
+#endif
 
 struct SignalHandlersInfo {
     HashMap<int, NonnullRefPtr<SignalHandlers>> signal_handlers;
@@ -221,14 +271,15 @@ static void post_application_event()
     [NSApp postEvent:event atStart:NO];
 }
 
-struct EventLoopImplementationMacOS::Impl {
-    Impl(EventLoopImplementationMacOS& event_loop_implementation)
+struct EventLoopImplementationAppKit::Impl {
+#if LADYBIRD_APPLE
+    Impl(EventLoopImplementationAppKit& event_loop_implementation)
         : run_loop(CFRunLoopGetCurrent())
     {
         CFRunLoopSourceContext context {};
         context.info = &event_loop_implementation;
         context.perform = [](void* info) {
-            auto& self = *static_cast<EventLoopImplementationMacOS*>(info);
+            auto& self = *static_cast<EventLoopImplementationAppKit*>(info);
             self.m_impl->deferred_source_pending = false;
             self.m_thread_event_queue.process();
         };
@@ -245,22 +296,33 @@ struct EventLoopImplementationMacOS::Impl {
 
     CFRunLoopRef run_loop { nullptr };
     CFRunLoopSourceRef deferred_source { nullptr };
+#else
+    // GNUstep: Use NSRunLoop
+    Impl(EventLoopImplementationAppKit& event_loop_implementation)
+        : event_loop(&event_loop_implementation)
+    {
+    }
+
+    ~Impl() = default;
+
+    EventLoopImplementationAppKit* event_loop { nullptr };
+#endif
     Atomic<bool> deferred_source_pending { false };
 };
 
-EventLoopImplementationMacOS::EventLoopImplementationMacOS()
+EventLoopImplementationAppKit::EventLoopImplementationAppKit()
     : m_impl(make<Impl>(*this))
 {
 }
 
-EventLoopImplementationMacOS::~EventLoopImplementationMacOS() = default;
+EventLoopImplementationAppKit::~EventLoopImplementationAppKit() = default;
 
-NonnullOwnPtr<Core::EventLoopImplementation> EventLoopManagerMacOS::make_implementation()
+NonnullOwnPtr<Core::EventLoopImplementation> EventLoopManagerAppKit::make_implementation()
 {
-    return EventLoopImplementationMacOS::create();
+    return EventLoopImplementationAppKit::create();
 }
 
-intptr_t EventLoopManagerMacOS::register_timer(Core::EventReceiver& receiver, int interval_milliseconds, bool should_reload)
+intptr_t EventLoopManagerAppKit::register_timer(Core::EventReceiver& receiver, int interval_milliseconds, bool should_reload)
 {
     auto& thread_data = ThreadData::the();
 
@@ -268,6 +330,8 @@ intptr_t EventLoopManagerMacOS::register_timer(Core::EventReceiver& receiver, in
     auto weak_receiver = receiver.make_weak_ptr();
 
     auto interval_seconds = static_cast<double>(interval_milliseconds) / 1000.0;
+
+#if LADYBIRD_APPLE
     auto first_fire_time = CFAbsoluteTimeGetCurrent() + interval_seconds;
 
     auto* timer = CFRunLoopTimerCreateWithHandler(
@@ -283,22 +347,43 @@ intptr_t EventLoopManagerMacOS::register_timer(Core::EventReceiver& receiver, in
         });
 
     CFRunLoopAddTimer(CFRunLoopGetCurrent(), timer, kCFRunLoopDefaultMode);
+#else
+    // GNUstep: Use NSTimer
+    auto* timer = [NSTimer scheduledTimerWithTimeInterval:interval_seconds
+                                                  repeats:should_reload
+                                                    block:^(NSTimer*) {
+                                                        auto receiver_ref = weak_receiver.strong_ref();
+                                                        if (!receiver_ref) {
+                                                            return;
+                                                        }
+
+                                                        Core::TimerEvent event;
+                                                        receiver_ref->dispatch_event(event);
+                                                    }];
+    // Ensure timer runs in common modes (including modal panels)
+    [[NSRunLoop currentRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
+#endif
     thread_data.timers.set(timer_id, timer);
 
     return timer_id;
 }
 
-void EventLoopManagerMacOS::unregister_timer(intptr_t timer_id)
+void EventLoopManagerAppKit::unregister_timer(intptr_t timer_id)
 {
     auto& thread_data = ThreadData::the();
     thread_data.timer_id_allocator.deallocate(static_cast<int>(timer_id));
 
     auto timer = thread_data.timers.take(static_cast<int>(timer_id));
     VERIFY(timer.has_value());
+#if LADYBIRD_APPLE
     CFRunLoopTimerInvalidate(*timer);
     CFRelease(*timer);
+#else
+    [*timer invalidate];
+#endif
 }
 
+#if LADYBIRD_APPLE
 struct SocketNotifierCallbackContext : public RefCounted<SocketNotifierCallbackContext> {
     WeakPtr<Core::EventReceiver> notifier;
 };
@@ -338,9 +423,11 @@ static void socket_notifier(CFSocketRef socket, CFSocketCallBackType notificatio
     // otherwise it hangs indefinitely in any ongoing pump(PumpMode::WaitForEvents) invocation.
     post_application_event();
 }
+#endif
 
-void EventLoopManagerMacOS::register_notifier(Core::Notifier& notifier)
+void EventLoopManagerAppKit::register_notifier(Core::Notifier& notifier)
 {
+#if LADYBIRD_APPLE
     auto notification_type = kCFSocketNoCallBack;
 
     switch (notifier.type()) {
@@ -371,26 +458,80 @@ void EventLoopManagerMacOS::register_notifier(Core::Notifier& notifier)
     CFRelease(socket);
 
     ThreadData::the().notifiers.set(&notifier, { socket, source, CFRunLoopGetCurrent() });
+#else
+    // GNUstep: Use NSFileHandle with notification center
+    auto weak_notifier = notifier.make_weak_ptr();
+    auto* file_handle = [[NSFileHandle alloc] initWithFileDescriptor:notifier.fd() closeOnDealloc:NO];
+
+    NSString* notification_name = nil;
+    switch (notifier.type()) {
+    case Core::Notifier::Type::Read:
+        notification_name = NSFileHandleReadCompletionNotification;
+        break;
+    case Core::Notifier::Type::Write:
+        // NSFileHandle doesn't have a direct write notification, we'll use read for now
+        // This is a limitation of the GNUstep port
+        notification_name = NSFileHandleReadCompletionNotification;
+        break;
+    default:
+        TODO();
+        break;
+    }
+
+    id observer = [[NSNotificationCenter defaultCenter]
+        addObserverForName:notification_name
+                    object:file_handle
+                     queue:nil
+                usingBlock:^(NSNotification*) {
+                    auto notifier_ref = weak_notifier.strong_ref();
+                    if (!notifier_ref)
+                        return;
+
+                    Core::NotifierActivationEvent event;
+                    notifier_ref->dispatch_event(event);
+
+                    // Re-register for next notification
+                    if (notifier.type() == Core::Notifier::Type::Read) {
+                        [file_handle waitForDataInBackgroundAndNotify];
+                    }
+                }];
+
+    if (notifier.type() == Core::Notifier::Type::Read) {
+        [file_handle waitForDataInBackgroundAndNotify];
+    }
+
+    ThreadData::the().notifiers.set(&notifier, { file_handle, observer });
+#endif
     notifier.set_owner_thread(s_thread_id);
 }
 
-void EventLoopManagerMacOS::unregister_notifier(Core::Notifier& notifier)
+void EventLoopManagerAppKit::unregister_notifier(Core::Notifier& notifier)
 {
     auto* thread_data = ThreadData::for_thread(notifier.owner_thread());
     if (!thread_data)
         return;
     auto state = thread_data->notifiers.take(&notifier);
     VERIFY(state.has_value());
+#if LADYBIRD_APPLE
     CFSocketInvalidate(state->socket);
     CFRunLoopRemoveSource(state->run_loop, state->source, kCFRunLoopCommonModes);
     CFRelease(state->source);
+#else
+    [[NSNotificationCenter defaultCenter] removeObserver:state->observer];
+#endif
 }
 
-void EventLoopManagerMacOS::did_post_event()
+void EventLoopManagerAppKit::did_post_event()
 {
+#if LADYBIRD_APPLE
     CFRunLoopWakeUp(CFRunLoopGetCurrent());
+#else
+    // GNUstep: Post an application event to wake the run loop
+    post_application_event();
+#endif
 }
 
+#if LADYBIRD_APPLE
 static void handle_signal(CFFileDescriptorRef f, CFOptionFlags callback_types, void* info)
 {
     VERIFY(callback_types & kCFFileDescriptorReadCallBack);
@@ -404,14 +545,19 @@ static void handle_signal(CFFileDescriptorRef f, CFOptionFlags callback_types, v
 
     signal_handlers->dispatch();
 }
+#endif
 
-int EventLoopManagerMacOS::register_signal(int signal_number, Function<void(int)> handler)
+int EventLoopManagerAppKit::register_signal(int signal_number, Function<void(int)> handler)
 {
     VERIFY(signal_number != 0);
     auto& info = *signals_info();
     auto handlers = info.signal_handlers.find(signal_number);
     if (handlers == info.signal_handlers.end()) {
+#if LADYBIRD_APPLE
         auto signal_handlers = adopt_ref(*new SignalHandlers(signal_number, &handle_signal));
+#else
+        auto signal_handlers = adopt_ref(*new SignalHandlers(signal_number));
+#endif
         auto handler_id = signal_handlers->add(move(handler));
         info.signal_handlers.set(signal_number, move(signal_handlers));
         return handler_id;
@@ -420,7 +566,7 @@ int EventLoopManagerMacOS::register_signal(int signal_number, Function<void(int)
     }
 }
 
-void EventLoopManagerMacOS::unregister_signal(int handler_id)
+void EventLoopManagerAppKit::unregister_signal(int handler_id)
 {
     VERIFY(handler_id != 0);
     int remove_signal_number = 0;
@@ -437,18 +583,18 @@ void EventLoopManagerMacOS::unregister_signal(int handler_id)
         info.signal_handlers.remove(remove_signal_number);
 }
 
-NonnullOwnPtr<EventLoopImplementationMacOS> EventLoopImplementationMacOS::create()
+NonnullOwnPtr<EventLoopImplementationAppKit> EventLoopImplementationAppKit::create()
 {
-    return adopt_own(*new EventLoopImplementationMacOS);
+    return adopt_own(*new EventLoopImplementationAppKit);
 }
 
-int EventLoopImplementationMacOS::exec()
+int EventLoopImplementationAppKit::exec()
 {
     [NSApp run];
     return m_exit_code;
 }
 
-size_t EventLoopImplementationMacOS::pump(PumpMode mode)
+size_t EventLoopImplementationAppKit::pump(PumpMode mode)
 {
     auto* wait_until = mode == PumpMode::WaitForEvents ? [NSDate distantFuture] : [NSDate distantPast];
 
@@ -469,18 +615,22 @@ size_t EventLoopImplementationMacOS::pump(PumpMode mode)
     return 0;
 }
 
-void EventLoopImplementationMacOS::quit(int exit_code)
+void EventLoopImplementationAppKit::quit(int exit_code)
 {
     m_exit_code = exit_code;
     [NSApp stop:nil];
 }
 
-void EventLoopImplementationMacOS::wake()
+void EventLoopImplementationAppKit::wake()
 {
+#if LADYBIRD_APPLE
     CFRunLoopWakeUp(CFRunLoopGetCurrent());
+#else
+    post_application_event();
+#endif
 }
 
-bool EventLoopImplementationMacOS::was_exit_requested() const
+bool EventLoopImplementationAppKit::was_exit_requested() const
 {
     return ![NSApp isRunning];
 }

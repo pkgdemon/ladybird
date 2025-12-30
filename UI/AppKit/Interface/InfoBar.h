@@ -7,12 +7,17 @@
 #pragma once
 
 #import <Cocoa/Cocoa.h>
+#import <Platform.h>
 
 @class Tab;
 
 using InfoBarDismissed = void (^)(void);
 
+#if LADYBIRD_HAS_STACKVIEW
 @interface InfoBar : NSStackView
+#else
+@interface InfoBar : NSView
+#endif
 
 - (void)showWithMessage:(NSString*)message
       dismissButtonTitle:(NSString*)title

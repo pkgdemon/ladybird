@@ -10,6 +10,7 @@
 #include <AK/Vector.h>
 
 #import <Cocoa/Cocoa.h>
+#import <Platform.h>
 
 @protocol AutocompleteObserver <NSObject>
 
@@ -17,7 +18,11 @@
 
 @end
 
+#if LADYBIRD_HAS_POPOVER
 @interface Autocomplete : NSPopover
+#else
+@interface Autocomplete : NSPanel
+#endif
 
 - (instancetype)init:(id<AutocompleteObserver>)observer
      withToolbarItem:(NSToolbarItem*)toolbar_item;

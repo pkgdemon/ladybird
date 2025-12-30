@@ -13,8 +13,12 @@
 #import <Interface/Event.h>
 #import <Interface/LadybirdWebView.h>
 #import <Interface/Menu.h>
-#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#import <Platform.h>
 #import <Utilities/Conversions.h>
+
+#if LADYBIRD_HAS_UNIFORMTYPEIDENTIFIERS
+#    import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#endif
 
 #if !__has_feature(objc_arc)
 #    error "This project requires ARC"
@@ -107,8 +111,13 @@ struct HideCursor {
         }
 
         // This returns device pixel ratio of the screen the window is opened in
+#if LADYBIRD_APPLE
         auto device_pixel_ratio = [[NSScreen mainScreen] backingScaleFactor];
         auto maximum_frames_per_second = [[NSScreen mainScreen] maximumFramesPerSecond];
+#else
+        auto device_pixel_ratio = 1.0;
+        auto maximum_frames_per_second = 60;
+#endif
 
         m_web_view_bridge = MUST(Ladybird::WebViewBridge::create(move(screen_rects), device_pixel_ratio, maximum_frames_per_second));
         [self setWebViewCallbacks];
@@ -174,14 +183,22 @@ struct HideCursor {
 
 - (void)handleDevicePixelRatioChange
 {
+#if LADYBIRD_APPLE
     m_web_view_bridge->set_device_pixel_ratio([[self window] backingScaleFactor]);
+#else
+    m_web_view_bridge->set_device_pixel_ratio(1.0);
+#endif
     [self updateViewportRect];
     [self updateStatusLabelPosition];
 }
 
 - (void)handleDisplayRefreshRateChange
 {
+#if LADYBIRD_APPLE
     m_web_view_bridge->set_maximum_frames_per_second([[[self window] screen] maximumFramesPerSecond]);
+#else
+    m_web_view_bridge->set_maximum_frames_per_second(60);
+#endif
 }
 
 - (void)handleVisibility:(BOOL)is_visible
@@ -646,6 +663,7 @@ struct HideCursor {
             [panel setMessage:@"Select file"];
         }
 
+#if LADYBIRD_HAS_UNIFORMTYPEIDENTIFIERS
         NSMutableArray<UTType*>* accepted_file_filters = [NSMutableArray array];
 
         for (auto const& filter : accepted_file_types.filters) {
@@ -682,6 +700,10 @@ struct HideCursor {
         // FIXME: Create an accessory view to allow selecting the active file filter.
         [panel setAllowedContentTypes:accepted_file_filters];
         [panel setAllowsOtherFileTypes:YES];
+#else
+        // GNUstep: File type filtering not supported, allow all files
+        (void)accepted_file_types;
+#endif
 
         [panel beginSheetModalForWindow:[self window]
                       completionHandler:^(NSInteger result) {

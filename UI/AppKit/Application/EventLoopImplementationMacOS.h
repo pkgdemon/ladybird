@@ -9,10 +9,12 @@
 #include <AK/Function.h>
 #include <AK/NonnullOwnPtr.h>
 #include <LibCore/EventLoopImplementation.h>
+#include <Platform.h>
 
 namespace Ladybird {
 
-class EventLoopManagerMacOS final : public Core::EventLoopManager {
+// Event loop manager for AppKit (works on both macOS and GNUstep)
+class EventLoopManagerAppKit final : public Core::EventLoopManager {
 public:
     virtual NonnullOwnPtr<Core::EventLoopImplementation> make_implementation() override;
 
@@ -28,12 +30,12 @@ public:
     virtual void unregister_signal(int) override;
 };
 
-class EventLoopImplementationMacOS final : public Core::EventLoopImplementation {
+class EventLoopImplementationAppKit final : public Core::EventLoopImplementation {
 public:
     // FIXME: This currently only manages the main NSApp event loop, as that is all we currently
     //        interact with. When we need multiple event loops, or an event loop that isn't the
-    //        NSApp loop, we will need to create our own CFRunLoop.
-    static NonnullOwnPtr<EventLoopImplementationMacOS> create();
+    //        NSApp loop, we will need to create our own run loop.
+    static NonnullOwnPtr<EventLoopImplementationAppKit> create();
 
     virtual int exec() override;
     virtual size_t pump(PumpMode) override;
@@ -41,15 +43,19 @@ public:
     virtual void wake() override;
     virtual bool was_exit_requested() const override;
 
-    virtual ~EventLoopImplementationMacOS() override;
+    virtual ~EventLoopImplementationAppKit() override;
 
 private:
-    EventLoopImplementationMacOS();
+    EventLoopImplementationAppKit();
 
     struct Impl;
     NonnullOwnPtr<Impl> m_impl;
 
     int m_exit_code { 0 };
 };
+
+// Keep the old names as aliases for compatibility
+using EventLoopManagerMacOS = EventLoopManagerAppKit;
+using EventLoopImplementationMacOS = EventLoopImplementationAppKit;
 
 }

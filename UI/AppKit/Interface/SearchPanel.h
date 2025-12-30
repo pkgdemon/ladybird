@@ -9,8 +9,13 @@
 #include <AK/Optional.h>
 
 #import <Cocoa/Cocoa.h>
+#import <Platform.h>
 
+#if LADYBIRD_HAS_STACKVIEW
 @interface SearchPanel : NSStackView
+#else
+@interface SearchPanel : NSView
+#endif
 
 - (void)find:(id)selector;
 - (void)findNextMatch:(id)selector;

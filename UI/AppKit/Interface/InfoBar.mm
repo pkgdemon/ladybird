@@ -12,6 +12,7 @@
 #endif
 
 static constexpr CGFloat const INFO_BAR_HEIGHT = 40;
+static constexpr CGFloat const INFO_BAR_PADDING = 8;
 
 @interface InfoBar ()
 
@@ -33,6 +34,7 @@ static constexpr CGFloat const INFO_BAR_HEIGHT = 40;
                                                  action:@selector(dismiss:)];
         [self.dismiss_button setBezelStyle:NSBezelStyleAccessoryBarAction];
 
+#if LADYBIRD_HAS_STACKVIEW
         [self addView:self.text_label inGravity:NSStackViewGravityLeading];
         [self addView:self.dismiss_button inGravity:NSStackViewGravityTrailing];
 
@@ -40,10 +42,38 @@ static constexpr CGFloat const INFO_BAR_HEIGHT = 40;
         [self setEdgeInsets:NSEdgeInsets { 0, 8, 0, 8 }];
 
         [[self heightAnchor] constraintEqualToConstant:INFO_BAR_HEIGHT].active = YES;
+#else
+        [self addSubview:self.text_label];
+        [self addSubview:self.dismiss_button];
+        [self setAutoresizingMask:NSViewWidthSizable];
+#endif
     }
 
     return self;
 }
+
+#if !LADYBIRD_HAS_STACKVIEW
+- (void)resizeSubviewsWithOldSize:(NSSize)oldSize
+{
+    [super resizeSubviewsWithOldSize:oldSize];
+    [self layoutSubviews];
+}
+
+- (void)layoutSubviews
+{
+    auto bounds = [self bounds];
+    auto button_size = [self.dismiss_button intrinsicContentSize];
+
+    // Position text label on the left with padding
+    auto label_width = bounds.size.width - button_size.width - INFO_BAR_PADDING * 3;
+    [self.text_label setFrame:NSMakeRect(INFO_BAR_PADDING, (bounds.size.height - 20) / 2, label_width, 20)];
+
+    // Position button on the right with padding
+    [self.dismiss_button setFrame:NSMakeRect(bounds.size.width - button_size.width - INFO_BAR_PADDING,
+                                             (bounds.size.height - button_size.height) / 2,
+                                             button_size.width, button_size.height)];
+}
+#endif
 
 - (void)showWithMessage:(NSString*)message
       dismissButtonTitle:(NSString*)title
@@ -88,8 +118,18 @@ static constexpr CGFloat const INFO_BAR_HEIGHT = 40;
 {
     [self removeFromSuperview];
 
+#if LADYBIRD_HAS_STACKVIEW
     [tab.contentView addView:self inGravity:NSStackViewGravityTrailing];
     [[self leadingAnchor] constraintEqualToAnchor:[tab.contentView leadingAnchor]].active = YES;
+#else
+    // GNUstep: Manually position at top of content view
+    auto content_bounds = [tab.contentView bounds];
+    auto frame = NSMakeRect(0, content_bounds.size.height - INFO_BAR_HEIGHT,
+                            content_bounds.size.width, INFO_BAR_HEIGHT);
+    [self setFrame:frame];
+    [tab.contentView addSubview:self];
+    [self layoutSubviews];
+#endif
 }
 
 @end

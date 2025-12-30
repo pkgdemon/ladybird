@@ -1,3 +1,19 @@
+# Detect GNUstep vs macOS
+if(APPLE)
+    set(LADYBIRD_GNUSTEP OFF)
+else()
+    # Check for GNUstep
+    find_package(PkgConfig)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(GNUSTEP gnustep-base gnustep-gui)
+    endif()
+    if(GNUSTEP_FOUND)
+        set(LADYBIRD_GNUSTEP ON)
+    else()
+        message(FATAL_ERROR "GNUstep not found. Please install gnustep-base and gnustep-gui.")
+    endif()
+endif()
+
 add_library(ladybird_impl STATIC
     Application/Application.mm
     Application/ApplicationDelegate.mm
@@ -23,10 +39,22 @@ target_compile_options(ladybird_impl PUBLIC
 )
 target_compile_features(ladybird_impl PUBLIC cxx_std_23)
 
-add_executable(ladybird MACOSX_BUNDLE
-   main.mm
-)
-target_link_libraries(ladybird_impl PUBLIC "-framework Cocoa -framework UniformTypeIdentifiers" LibUnicode)
-target_link_libraries(ladybird PRIVATE ladybird_impl)
+if(LADYBIRD_GNUSTEP)
+    # GNUstep build configuration
+    target_compile_definitions(ladybird_impl PUBLIC GNUSTEP=1)
+    target_include_directories(ladybird_impl PUBLIC ${GNUSTEP_INCLUDE_DIRS})
+    target_link_libraries(ladybird_impl PUBLIC ${GNUSTEP_LIBRARIES} LibUnicode)
 
-create_ladybird_bundle(ladybird)
+    add_executable(ladybird
+        main.mm
+    )
+else()
+    # macOS build configuration
+    add_executable(ladybird MACOSX_BUNDLE
+        main.mm
+    )
+    target_link_libraries(ladybird_impl PUBLIC "-framework Cocoa -framework UniformTypeIdentifiers" LibUnicode)
+    create_ladybird_bundle(ladybird)
+endif()
+
+target_link_libraries(ladybird PRIVATE ladybird_impl)
