@@ -15,6 +15,7 @@
 #include <LibCore/ThreadEventQueue.h>
 #include <LibThreading/RWLock.h>
 
+#import <Platform.h>
 #import <Cocoa/Cocoa.h>
 
 #if LADYBIRD_APPLE
@@ -373,13 +374,18 @@ void EventLoopManagerAppKit::unregister_timer(intptr_t timer_id)
     auto& thread_data = ThreadData::the();
     thread_data.timer_id_allocator.deallocate(static_cast<int>(timer_id));
 
+#if LADYBIRD_APPLE
     auto timer = thread_data.timers.take(static_cast<int>(timer_id));
     VERIFY(timer.has_value());
-#if LADYBIRD_APPLE
     CFRunLoopTimerInvalidate(*timer);
     CFRelease(*timer);
 #else
-    [*timer invalidate];
+    // GNUstep: Avoid Optional<NSTimer*> which has deleted destructor under ARC
+    auto timer_opt = thread_data.timers.get(static_cast<int>(timer_id));
+    VERIFY(timer_opt.has_value());
+    NSTimer* timer = *timer_opt;
+    thread_data.timers.remove(static_cast<int>(timer_id));
+    [timer invalidate];
 #endif
 }
 

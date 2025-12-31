@@ -9,6 +9,7 @@
 #include <LibCore/ThreadEventQueue.h>
 #include <Utilities/Conversions.h>
 
+#import <Platform.h>
 #import <Application/Application.h>
 #import <Application/ApplicationDelegate.h>
 #import <Interface/LadybirdWebView.h>
@@ -112,7 +113,11 @@ Vector<Web::Clipboard::SystemClipboardRepresentation> Application::clipboard_ent
     Vector<Web::Clipboard::SystemClipboardRepresentation> representations;
     auto* paste_board = [NSPasteboard generalPasteboard];
 
+#if LADYBIRD_APPLE
     for (NSPasteboardType type : [paste_board types]) {
+#else
+    for (NSString* type in [paste_board types]) {
+#endif
         String mime_type;
 
         if (type == NSPasteboardTypeString)
@@ -133,7 +138,11 @@ Vector<Web::Clipboard::SystemClipboardRepresentation> Application::clipboard_ent
 
 void Application::insert_clipboard_entry(Web::Clipboard::SystemClipboardRepresentation entry)
 {
+#if LADYBIRD_APPLE
     NSPasteboardType pasteboard_type = nil;
+#else
+    NSString* pasteboard_type = nil;
+#endif
 
     // https://w3c.github.io/clipboard-apis/#os-specific-well-known-format
     if (entry.mime_type == "text/plain"sv)

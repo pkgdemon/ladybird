@@ -35,29 +35,33 @@
 #    endif
 
 // GNUstep compatibility: Bezel styles
+// Only define if not already defined by GNUstep headers
 #    ifndef NSBezelStyleAccessoryBarAction
 #        define NSBezelStyleAccessoryBarAction NSRoundedBezelStyle
 #    endif
 
-// GNUstep compatibility: NSTableViewRowSizeStyle
-#    ifndef NSTableViewRowSizeStyleDefault
-#        define NSTableViewRowSizeStyleDefault 0
-#    endif
+// Note: NSTableViewRowSizeStyleDefault, NSPasteboardType*, etc. are already
+// defined by GNUstep headers (possibly with different names). We handle
+// these differences inline in the code rather than with macros to avoid
+// conflicts with GNUstep's own definitions.
 
-// GNUstep compatibility: NSPasteboardType is just NSString*
-typedef NSString* NSPasteboardType;
+// GNUstep feature availability
+#    define LADYBIRD_HAS_DRAGGING_DESTINATION 0
+#    define LADYBIRD_HAS_TRACKING_AREA 0
+#    define LADYBIRD_HAS_GESTURE_RECOGNIZER 0
+#    define LADYBIRD_HAS_ALERT_ACCESSORY 0
+#    define LADYBIRD_HAS_SHEET_RETURN_CODE 0
+#    define LADYBIRD_HAS_MENU_MIN_WIDTH 0
+#else
+#    define LADYBIRD_HAS_DRAGGING_DESTINATION 1
+#    define LADYBIRD_HAS_TRACKING_AREA 1
+#    define LADYBIRD_HAS_GESTURE_RECOGNIZER 1
+#    define LADYBIRD_HAS_ALERT_ACCESSORY 1
+#    define LADYBIRD_HAS_SHEET_RETURN_CODE 1
+#    define LADYBIRD_HAS_MENU_MIN_WIDTH 1
+#endif
 
-// GNUstep compatibility: Pasteboard type constants
-// GNUstep uses different constant names
-#    ifndef NSPasteboardTypeString
-#        define NSPasteboardTypeString NSStringPboardType
-#    endif
-#    ifndef NSPasteboardTypeHTML
-#        define NSPasteboardTypeHTML NSHTMLPboardType
-#    endif
-#    ifndef NSPasteboardTypePNG
-#        define NSPasteboardTypePNG NSPNGPboardType
-#    endif
+#if LADYBIRD_GNUSTEP
 
 // GNUstep compatibility: Carbon key codes (kVK_* constants)
 // These are hardware-independent virtual key codes from Carbon/HIToolbox/Events.h

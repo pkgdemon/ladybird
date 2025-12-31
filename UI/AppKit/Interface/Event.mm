@@ -61,6 +61,7 @@ Web::MouseEvent ns_event_to_mouse_event(Web::MouseEvent::Type type, NSEvent* eve
             type = Web::MouseEvent::Type::DoubleClick;
         }
     } else if (type == Web::MouseEvent::Type::MouseWheel) {
+#if LADYBIRD_APPLE
         CGFloat delta_x = -[event scrollingDeltaX];
         CGFloat delta_y = -[event scrollingDeltaY];
 
@@ -70,6 +71,12 @@ Web::MouseEvent ns_event_to_mouse_event(Web::MouseEvent::Type type, NSEvent* eve
             delta_x *= imprecise_scroll_multiplier;
             delta_y *= imprecise_scroll_multiplier;
         }
+#else
+        // GNUstep: Use deltaX/deltaY with standard multiplier (no precise scrolling)
+        static constexpr CGFloat imprecise_scroll_multiplier = 24;
+        CGFloat delta_x = -[event deltaX] * imprecise_scroll_multiplier;
+        CGFloat delta_y = -[event deltaY] * imprecise_scroll_multiplier;
+#endif
 
         wheel_delta_x = static_cast<int>(delta_x);
         wheel_delta_y = static_cast<int>(delta_y);
@@ -102,6 +109,7 @@ Web::DragEvent ns_event_to_drag_event(Web::DragEvent::Type type, id<NSDraggingIn
     OwnPtr<DragData> browser_data;
 
     auto for_each_file = [&](auto callback) {
+#if LADYBIRD_APPLE
         NSArray* file_list = [[event draggingPasteboard] readObjectsForClasses:@[ [NSURL class] ]
                                                                        options:nil];
 
@@ -109,6 +117,15 @@ Web::DragEvent ns_event_to_drag_event(Web::DragEvent::Type type, id<NSDraggingIn
             auto file_path = Ladybird::ns_string_to_byte_string([file path]);
             callback(file_path);
         }
+#else
+        // GNUstep: Use propertyListForType with NSFilenamesPboardType
+        NSArray* file_list = [[event draggingPasteboard] propertyListForType:NSFilenamesPboardType];
+
+        for (NSString* file_path_str in file_list) {
+            auto file_path = Ladybird::ns_string_to_byte_string(file_path_str);
+            callback(file_path);
+        }
+#endif
     };
 
     if (type == Web::DragEvent::Type::DragStart) {
@@ -275,27 +292,44 @@ static Web::UIEvents::KeyCode ns_key_code_to_key_code(unsigned short key_code, W
 class KeyData : public Web::BrowserInputData {
 public:
     explicit KeyData(NSEvent* event)
+#if LADYBIRD_APPLE
         : m_event(CFBridgingRetain(event))
+#else
+        : m_event(event)
+#endif
     {
     }
 
     virtual ~KeyData() override
     {
+#if LADYBIRD_APPLE
         if (m_event != nullptr) {
             CFBridgingRelease(m_event);
         }
+#endif
+        // GNUstep: ARC handles release automatically
     }
 
     NSEvent* take_event()
     {
         VERIFY(m_event != nullptr);
 
+#if LADYBIRD_APPLE
         CFTypeRef event = exchange(m_event, nullptr);
         return CFBridgingRelease(event);
+#else
+        NSEvent* event = m_event;
+        m_event = nil;
+        return event;
+#endif
     }
 
 private:
+#if LADYBIRD_APPLE
     CFTypeRef m_event { nullptr };
+#else
+    NSEvent* m_event { nil };
+#endif
 };
 
 Web::KeyEvent ns_event_to_key_event(Web::KeyEvent::Type type, NSEvent* event)

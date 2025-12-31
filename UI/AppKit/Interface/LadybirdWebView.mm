@@ -39,7 +39,11 @@ struct HideCursor {
     }
 };
 
+#if LADYBIRD_HAS_DRAGGING_DESTINATION
 @interface LadybirdWebView () <NSDraggingDestination>
+#else
+@interface LadybirdWebView ()
+#endif
 {
     OwnPtr<Ladybird::WebViewBridge> m_web_view_bridge;
 
@@ -127,17 +131,23 @@ struct HideCursor {
         self.image_context_menu = Ladybird::create_context_menu(self, [self view].image_context_menu());
         self.media_context_menu = Ladybird::create_context_menu(self, [self view].media_context_menu());
 
+#if LADYBIRD_HAS_TRACKING_AREA
         auto* area = [[NSTrackingArea alloc] initWithRect:[self bounds]
                                                   options:NSTrackingActiveInKeyWindow | NSTrackingInVisibleRect | NSTrackingMouseEnteredAndExited | NSTrackingMouseMoved
                                                     owner:self
                                                  userInfo:nil];
         [self addTrackingArea:area];
+#endif
 
+#if LADYBIRD_HAS_DRAGGING_DESTINATION
         [self registerForDraggedTypes:[NSArray arrayWithObjects:NSPasteboardTypeFileURL, nil]];
+#endif
 
+#if LADYBIRD_HAS_GESTURE_RECOGNIZER
         self.pinch_recognizer = [[NSMagnificationGestureRecognizer alloc] initWithTarget:self
                                                                                   action:@selector(onPinch:)];
         [self addGestureRecognizer:self.pinch_recognizer];
+#endif
 
         m_modifier_flags = 0;
     }
@@ -574,9 +584,10 @@ struct HideCursor {
         [[self.dialog addButtonWithTitle:@"OK"] setTag:NSModalResponseOK];
         [[self.dialog addButtonWithTitle:@"Cancel"] setTag:NSModalResponseCancel];
         [self.dialog setMessageText:ns_message];
+#if LADYBIRD_HAS_ALERT_ACCESSORY
         [self.dialog setAccessoryView:input];
-
         self.dialog.window.initialFirstResponder = input;
+#endif
 
         [self.dialog beginSheetModalForWindow:[self window]
                             completionHandler:^(NSModalResponse response) {
@@ -591,6 +602,7 @@ struct HideCursor {
                             }];
     };
 
+#if LADYBIRD_HAS_ALERT_ACCESSORY
     m_web_view_bridge->on_request_set_prompt_text = [weak_self](auto const& message) {
         LadybirdWebView* self = weak_self;
         if (self == nil) {
@@ -605,7 +617,9 @@ struct HideCursor {
         auto* input = (NSTextField*)[self.dialog accessoryView];
         [input setStringValue:ns_message];
     };
+#endif
 
+#if LADYBIRD_HAS_SHEET_RETURN_CODE
     m_web_view_bridge->on_request_accept_dialog = [weak_self]() {
         LadybirdWebView* self = weak_self;
         if (self == nil || self.dialog == nil) {
@@ -625,6 +639,7 @@ struct HideCursor {
         [[self window] endSheet:[[self dialog] window]
                      returnCode:NSModalResponseCancel];
     };
+#endif
 
     m_web_view_bridge->on_request_color_picker = [weak_self](Color current_color) {
         LadybirdWebView* self = weak_self;
@@ -737,7 +752,11 @@ struct HideCursor {
             return;
         }
         [self.select_dropdown removeAllItems];
+#if LADYBIRD_HAS_MENU_MIN_WIDTH
         self.select_dropdown.minimumWidth = minimum_width;
+#else
+        (void)minimum_width;
+#endif
 
         auto add_menu_item = [self](Web::HTML::SelectItemOption const& item_option, bool in_option_group) {
             NSMenuItem* menuItem = [[NSMenuItem alloc]
@@ -778,7 +797,11 @@ struct HideCursor {
         if (self == nil) {
             return;
         }
+#if LADYBIRD_APPLE
         [[self window] setIsMiniaturized:NO];
+#else
+        [[self window] deminiaturize:nil];
+#endif
         [[self window] orderFront:nil];
     };
 
@@ -825,7 +848,11 @@ struct HideCursor {
             return;
         }
 
+#if LADYBIRD_APPLE
         [[self window] setIsMiniaturized:YES];
+#else
+        [[self window] miniaturize:nil];
+#endif
     };
 
     m_web_view_bridge->on_fullscreen_window = [weak_self]() {
@@ -834,9 +861,15 @@ struct HideCursor {
             return;
         }
 
+#if LADYBIRD_APPLE
         if (([[self window] styleMask] & NSWindowStyleMaskFullScreen) == 0) {
             [[self window] toggleFullScreen:nil];
         }
+#else
+        // GNUstep: toggleFullScreen not available, maximize window instead
+        auto frame = [[[self window] screen] frame];
+        [[self window] setFrame:frame display:YES];
+#endif
 
         m_web_view_bridge->did_update_window_rect();
     };
@@ -846,7 +879,12 @@ struct HideCursor {
         if (self == nil) {
             return;
         }
+#if LADYBIRD_APPLE
         self.layer.backgroundColor = [Ladybird::gfx_color_to_ns_color(color) CGColor];
+#else
+        // GNUstep: Layer-backed views not fully supported, skip theme color
+        (void)color;
+#endif
     };
 
     m_web_view_bridge->on_find_in_page = [weak_self](auto current_match_index, auto const& total_match_count) {
@@ -886,8 +924,14 @@ struct HideCursor {
 
 - (void)menuDidClose:(NSMenu*)menu
 {
+#if LADYBIRD_APPLE
     if (!menu.highlightedItem)
         m_web_view_bridge->select_dropdown_closed({});
+#else
+    // GNUstep: highlightedItem not available, always close
+    (void)menu;
+    m_web_view_bridge->select_dropdown_closed({});
+#endif
 }
 
 - (void)colorPickerUpdate:(NSColorPanel*)colorPanel
@@ -905,7 +949,15 @@ struct HideCursor {
 - (NSTextField*)status_label
 {
     if (!_status_label) {
+#if LADYBIRD_APPLE
         _status_label = [NSTextField labelWithString:@""];
+#else
+        _status_label = [[NSTextField alloc] init];
+        [_status_label setStringValue:@""];
+        [_status_label setEditable:NO];
+        [_status_label setSelectable:NO];
+        [_status_label setBezeled:NO];
+#endif
         [_status_label setDrawsBackground:YES];
         [_status_label setBordered:YES];
         [_status_label setHidden:YES];
@@ -1226,6 +1278,7 @@ struct HideCursor {
     return NSZeroRect;
 }
 
+#if LADYBIRD_HAS_DRAGGING_DESTINATION
 #pragma mark - NSDraggingDestination
 
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)event
@@ -1262,7 +1315,9 @@ struct HideCursor {
 {
     return NO;
 }
+#endif
 
+#if LADYBIRD_HAS_GESTURE_RECOGNIZER
 - (void)onPinch:(NSMagnificationGestureRecognizer*)recognizer
 {
     double scale_delta = 0;
@@ -1289,5 +1344,6 @@ struct HideCursor {
     pinch_event.scale_delta = scale_delta;
     m_web_view_bridge->enqueue_input_event(move(pinch_event));
 }
+#endif
 
 @end
