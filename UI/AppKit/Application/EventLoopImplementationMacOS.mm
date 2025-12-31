@@ -491,19 +491,28 @@ void EventLoopManagerAppKit::register_notifier(Core::Notifier& notifier)
         addObserverForName:notification_name
                     object:file_handle
                      queue:nil
-                usingBlock:^(NSNotification*) {
+                usingBlock:^(NSNotification* notification) {
                     auto notifier_ref = weak_notifier.strong_ref();
                     if (!notifier_ref)
                         return;
 
-                    // Re-register for next notification BEFORE dispatching event
-                    // This ensures we can receive messages during sync IPC calls
+                    // Re-register for next notification immediately
                     if (notifier.type() == Core::Notifier::Type::Read) {
                         [file_handle waitForDataInBackgroundAndNotify];
                     }
 
-                    Core::NotifierActivationEvent event;
-                    notifier_ref->dispatch_event(event);
+                    // Use a zero-delay timer to defer event dispatch outside the notification handler.
+                    // This is critical for sync IPC - the notification handler must return quickly
+                    // so that nested notifications (for sync IPC responses) can be delivered.
+                    [NSTimer scheduledTimerWithTimeInterval:0
+                                                   repeats:NO
+                                                     block:^(NSTimer* timer) {
+                                                         auto ref = weak_notifier.strong_ref();
+                                                         if (!ref)
+                                                             return;
+                                                         Core::NotifierActivationEvent ev;
+                                                         ref->dispatch_event(ev);
+                                                     }];
                 }];
 
     if (notifier.type() == Core::Notifier::Type::Read) {
