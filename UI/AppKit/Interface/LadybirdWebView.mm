@@ -243,6 +243,14 @@ struct HideCursor {
 - (void)updateViewportRect
 {
     auto viewport_rect = Ladybird::ns_rect_to_gfx_rect([self frame]);
+#if !LADYBIRD_APPLE
+    NSLog(@"updateViewportRect: frame=(%g, %g, %g, %g) viewport=(%d, %d, %d, %d)",
+          [self frame].origin.x, [self frame].origin.y,
+          [self frame].size.width, [self frame].size.height,
+          viewport_rect.x(), viewport_rect.y(),
+          viewport_rect.width(), viewport_rect.height());
+    fflush(stderr);
+#endif
     m_web_view_bridge->set_viewport_rect(viewport_rect);
 }
 
@@ -272,6 +280,10 @@ struct HideCursor {
         if (self == nil) {
             return;
         }
+#if !LADYBIRD_APPLE
+        NSLog(@"on_ready_to_paint: calling setNeedsDisplay:YES");
+        fflush(stderr);
+#endif
         [self setNeedsDisplay:YES];
     };
 
@@ -311,6 +323,10 @@ struct HideCursor {
         if (self == nil) {
             return;
         }
+#if !LADYBIRD_APPLE
+        NSLog(@"on_load_start: url=%s is_redirect=%d", url.serialize().to_byte_string().characters(), is_redirect);
+        fflush(stderr);
+#endif
         [self.observer onLoadStart:url isRedirect:is_redirect];
 
         if (_status_label != nil) {
@@ -997,11 +1013,23 @@ struct HideCursor {
 
 - (void)drawRect:(NSRect)rect
 {
+#if !LADYBIRD_APPLE
+    NSLog(@"drawRect: rect=(%g, %g, %g, %g)", rect.origin.x, rect.origin.y, rect.size.width, rect.size.height);
+    fflush(stderr);
+#endif
     auto paintable = m_web_view_bridge->paintable();
     if (!paintable.has_value()) {
+#if !LADYBIRD_APPLE
+        NSLog(@"drawRect: no paintable, calling super");
+        fflush(stderr);
+#endif
         [super drawRect:rect];
         return;
     }
+#if !LADYBIRD_APPLE
+    NSLog(@"drawRect: have paintable, rendering bitmap");
+    fflush(stderr);
+#endif
 
     auto [bitmap, bitmap_size] = *paintable;
     VERIFY(bitmap.format() == Gfx::BitmapFormat::BGRA8888);

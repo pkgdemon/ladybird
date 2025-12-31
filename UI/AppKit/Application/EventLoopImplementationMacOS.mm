@@ -469,15 +469,18 @@ void EventLoopManagerAppKit::register_notifier(Core::Notifier& notifier)
     auto weak_notifier = notifier.make_weak_ptr();
     auto* file_handle = [[NSFileHandle alloc] initWithFileDescriptor:notifier.fd() closeOnDealloc:NO];
 
+    // Note: waitForDataInBackgroundAndNotify posts NSFileHandleDataAvailableNotification,
+    // NOT NSFileHandleReadCompletionNotification. We must listen for the correct notification.
     NSString* notification_name = nil;
     switch (notifier.type()) {
     case Core::Notifier::Type::Read:
-        notification_name = NSFileHandleReadCompletionNotification;
+        notification_name = NSFileHandleDataAvailableNotification;
         break;
     case Core::Notifier::Type::Write:
-        // NSFileHandle doesn't have a direct write notification, we'll use read for now
-        // This is a limitation of the GNUstep port
-        notification_name = NSFileHandleReadCompletionNotification;
+        // NSFileHandle doesn't have a direct write notification
+        // For write notifiers, we still need to handle them somehow
+        // This is a limitation of the GNUstep port - write notifications may not work correctly
+        notification_name = NSFileHandleDataAvailableNotification;
         break;
     default:
         TODO();
@@ -493,13 +496,14 @@ void EventLoopManagerAppKit::register_notifier(Core::Notifier& notifier)
                     if (!notifier_ref)
                         return;
 
-                    Core::NotifierActivationEvent event;
-                    notifier_ref->dispatch_event(event);
-
-                    // Re-register for next notification
+                    // Re-register for next notification BEFORE dispatching event
+                    // This ensures we can receive messages during sync IPC calls
                     if (notifier.type() == Core::Notifier::Type::Read) {
                         [file_handle waitForDataInBackgroundAndNotify];
                     }
+
+                    Core::NotifierActivationEvent event;
+                    notifier_ref->dispatch_event(event);
                 }];
 
     if (notifier.type() == Core::Notifier::Type::Read) {

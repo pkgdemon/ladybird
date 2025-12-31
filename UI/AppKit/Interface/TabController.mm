@@ -574,6 +574,10 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
     [self setupGNUstepLocationBar];
     NSLog(@"showWindow: custom location bar created");
     fflush(stderr);
+    // Update viewport rect after location bar modifies webview frame
+    [[[self tab] web_view] handleResize];
+    NSLog(@"showWindow: handleResize called after location bar setup");
+    fflush(stderr);
 #endif
 
     [self.window makeKeyAndOrderFront:sender];
