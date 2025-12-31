@@ -211,7 +211,12 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
 
 - (void)focusLocationToolbarItem
 {
+#if LADYBIRD_APPLE
     [self.window makeFirstResponder:self.location_toolbar_item.view];
+#else
+    // GNUstep: Toolbar not used, focus the web view instead
+    [self.window makeFirstResponder:[self tab].web_view];
+#endif
 }
 
 #pragma mark - Private methods
@@ -477,8 +482,11 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
         ? [[Tab alloc] initAsChild:self.parent pageIndex:m_page_index]
         : [[Tab alloc] init];
 #if !LADYBIRD_APPLE
-    NSLog(@"showWindow: Tab created");
+    NSLog(@"showWindow: Tab created, retaining immediately");
     fflush(stderr);
+    // GNUstep: Immediately add to ApplicationDelegate's managed_windows to prevent ARC deallocation
+    auto* appDelegate = (ApplicationDelegate*)[NSApp delegate];
+    [[appDelegate valueForKey:@"managed_windows"] addObject:self.window];
 #endif
 
     [self.window setDelegate:self];
@@ -487,26 +495,27 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
     fflush(stderr);
 #endif
 
-#if !LADYBIRD_APPLE
-    // GNUstep: Set toolbar delegate now that [self tab] is available
-    NSLog(@"showWindow: setting toolbar delegate");
-    fflush(stderr);
-    [self.toolbar setDelegate:self];
-    NSLog(@"showWindow: toolbar delegate set");
-    fflush(stderr);
-#endif
-    [self.window setToolbar:self.toolbar];
-#if !LADYBIRD_APPLE
-    NSLog(@"showWindow: toolbar attached to window");
-    fflush(stderr);
-#endif
 #if LADYBIRD_APPLE
+    [self.window setToolbar:self.toolbar];
     [self.window setToolbarStyle:NSWindowToolbarStyleUnified];
+#else
+    // GNUstep: Skip toolbar for now - it causes a hang
+    // TODO: Debug toolbar attachment issue on GNUstep
+    NSLog(@"showWindow: skipping toolbar on GNUstep");
+    fflush(stderr);
 #endif
 
     [self.window makeKeyAndOrderFront:sender];
+#if !LADYBIRD_APPLE
+    NSLog(@"showWindow: after makeKeyAndOrderFront, window=%p isVisible=%d", self.window, [self.window isVisible]);
+    fflush(stderr);
+#endif
 
     [self focusLocationToolbarItem];
+#if !LADYBIRD_APPLE
+    NSLog(@"showWindow: after focusLocationToolbarItem, window isVisible=%d", [self.window isVisible]);
+    fflush(stderr);
+#endif
 
     auto* delegate = (ApplicationDelegate*)[NSApp delegate];
     [delegate setActiveTab:[self tab]];
@@ -522,6 +531,10 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
 
 - (void)windowWillClose:(NSNotification*)notification
 {
+#if !LADYBIRD_APPLE
+    NSLog(@"windowWillClose: called");
+    fflush(stderr);
+#endif
     auto* delegate = (ApplicationDelegate*)[NSApp delegate];
     [delegate removeTab:self];
 }
@@ -563,25 +576,57 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
         itemForItemIdentifier:(NSString*)identifier
     willBeInsertedIntoToolbar:(BOOL)flag
 {
+#if !LADYBIRD_APPLE
+    NSLog(@"toolbar:itemForItemIdentifier: %@", identifier);
+    fflush(stderr);
+#endif
     if ([identifier isEqual:TOOLBAR_NAVIGATE_BACK_IDENTIFIER]) {
+#if !LADYBIRD_APPLE
+        NSLog(@"  returning navigate_back_toolbar_item");
+        fflush(stderr);
+#endif
         return self.navigate_back_toolbar_item;
     }
     if ([identifier isEqual:TOOLBAR_NAVIGATE_FORWARD_IDENTIFIER]) {
+#if !LADYBIRD_APPLE
+        NSLog(@"  returning navigate_forward_toolbar_item");
+        fflush(stderr);
+#endif
         return self.navigate_forward_toolbar_item;
     }
     if ([identifier isEqual:TOOLBAR_RELOAD_IDENTIFIER]) {
+#if !LADYBIRD_APPLE
+        NSLog(@"  returning reload_toolbar_item");
+        fflush(stderr);
+#endif
         return self.reload_toolbar_item;
     }
     if ([identifier isEqual:TOOLBAR_LOCATION_IDENTIFIER]) {
+#if !LADYBIRD_APPLE
+        NSLog(@"  returning location_toolbar_item");
+        fflush(stderr);
+#endif
         return self.location_toolbar_item;
     }
     if ([identifier isEqual:TOOLBAR_ZOOM_IDENTIFIER]) {
+#if !LADYBIRD_APPLE
+        NSLog(@"  returning zoom_toolbar_item");
+        fflush(stderr);
+#endif
         return self.zoom_toolbar_item;
     }
     if ([identifier isEqual:TOOLBAR_NEW_TAB_IDENTIFIER]) {
+#if !LADYBIRD_APPLE
+        NSLog(@"  returning new_tab_toolbar_item");
+        fflush(stderr);
+#endif
         return self.new_tab_toolbar_item;
     }
     if ([identifier isEqual:TOOLBAR_TAB_OVERVIEW_IDENTIFIER]) {
+#if !LADYBIRD_APPLE
+        NSLog(@"  returning tab_overview_toolbar_item");
+        fflush(stderr);
+#endif
         return self.tab_overview_toolbar_item;
     }
 

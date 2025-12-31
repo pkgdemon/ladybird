@@ -45,6 +45,10 @@
 
 - (void)setIsVisible:(BOOL)flag
 {
+#if !LADYBIRD_APPLE
+    NSLog(@"LadybirdWebViewWindow setIsVisible:%d", flag);
+    fflush(stderr);
+#endif
     [self.web_view handleVisibility:flag];
     [super setIsVisible:flag];
 }

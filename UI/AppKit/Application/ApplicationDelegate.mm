@@ -21,6 +21,10 @@
 @interface ApplicationDelegate ()
 
 @property (nonatomic, strong) NSMutableArray<TabController*>* managed_tabs;
+#if !LADYBIRD_APPLE
+// GNUstep: Need to explicitly retain windows to prevent ARC deallocation
+@property (nonatomic, strong) NSMutableArray<Tab*>* managed_windows;
+#endif
 @property (nonatomic, weak) Tab* active_tab;
 
 @property (nonatomic, strong) InfoBar* info_bar;
@@ -55,6 +59,9 @@
         [[NSApp mainMenu] addItem:[self createHelpMenu]];
 
         self.managed_tabs = [[NSMutableArray alloc] init];
+#if !LADYBIRD_APPLE
+        self.managed_windows = [[NSMutableArray alloc] init];
+#endif
 
         // Reduce the tooltip delay, as the default delay feels quite long.
         [[NSUserDefaults standardUserDefaults] setObject:@100 forKey:@"NSInitialToolTipDelay"];
@@ -68,22 +75,10 @@
 - (nonnull TabController*)createNewTab:(Web::HTML::ActivateTab)activate_tab
                                fromTab:(nullable Tab*)tab
 {
-#if !LADYBIRD_APPLE
-    NSLog(@"createNewTab:activateTab:fromTab: allocating TabController");
-    fflush(stderr);
-#endif
     auto* controller = [[TabController alloc] init];
-#if !LADYBIRD_APPLE
-    NSLog(@"createNewTab:activateTab:fromTab: TabController allocated, calling initializeTabController");
-    fflush(stderr);
-#endif
     [self initializeTabController:controller
                       activateTab:activate_tab
                           fromTab:tab];
-#if !LADYBIRD_APPLE
-    NSLog(@"createNewTab:activateTab:fromTab: initializeTabController done");
-    fflush(stderr);
-#endif
 
     return controller;
 }
@@ -98,21 +93,25 @@
 #endif
     auto* controller = [self createNewTab:activate_tab fromTab:tab];
 #if !LADYBIRD_APPLE
-    NSLog(@"createNewTab:fromTab:activateTab: controller created");
+    NSLog(@"createNewTab:fromTab:activateTab: controller created, window isVisible=%d", [[controller window] isVisible]);
     fflush(stderr);
 #endif
 
     if (url.has_value()) {
 #if !LADYBIRD_APPLE
-        NSLog(@"createNewTab:fromTab:activateTab: about to loadURL");
+        NSLog(@"createNewTab:fromTab:activateTab: about to loadURL, window isVisible=%d", [[controller window] isVisible]);
         fflush(stderr);
 #endif
         [controller loadURL:*url];
 #if !LADYBIRD_APPLE
-        NSLog(@"createNewTab:fromTab:activateTab: loadURL done");
+        NSLog(@"createNewTab:fromTab:activateTab: loadURL done, window isVisible=%d", [[controller window] isVisible]);
         fflush(stderr);
 #endif
     }
+#if !LADYBIRD_APPLE
+    NSLog(@"createNewTab:fromTab:activateTab: returning, window isVisible=%d", [[controller window] isVisible]);
+    fflush(stderr);
+#endif
 
     return controller;
 }
@@ -147,6 +146,9 @@
 
 - (void)removeTab:(TabController*)controller
 {
+#if !LADYBIRD_APPLE
+    [self.managed_windows removeObject:(Tab*)[controller window]];
+#endif
     [self.managed_tabs removeObject:controller];
 }
 
@@ -453,6 +455,18 @@
     // GNUstep requires explicit app activation
     [NSApp activateIgnoringOtherApps:YES];
     NSLog(@"applicationDidFinishLaunching: app activated");
+
+    // Debug: periodically check window state
+    [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer* timer) {
+        if (self.managed_windows.count > 0) {
+            Tab* win = self.managed_windows[0];
+            NSLog(@"Timer: window=%p isVisible=%d isKeyWindow=%d frame=%@",
+                  win, [win isVisible], [win isKeyWindow], NSStringFromRect([win frame]));
+        } else {
+            NSLog(@"Timer: no windows in managed_windows");
+        }
+        fflush(stderr);
+    }];
 #endif
 
     auto const& browser_options = WebView::Application::browser_options();
