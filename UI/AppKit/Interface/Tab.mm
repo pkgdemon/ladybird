@@ -95,6 +95,10 @@ static constexpr CGFloat const SEARCH_PANEL_HEIGHT = 30;
         [self setTitleVisibility:NSWindowTitleHidden];
 #endif
         [self setIsVisible:YES];
+#if !LADYBIRD_APPLE
+        // GNUstep requires explicit makeKeyAndOrderFront
+        [self makeKeyAndOrderFront:nil];
+#endif
 
         self.search_panel = [[SearchPanel alloc] init];
         [self.search_panel setHidden:YES];

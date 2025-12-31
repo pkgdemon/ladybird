@@ -404,6 +404,11 @@
 
 - (void)applicationDidFinishLaunching:(NSNotification*)notification
 {
+#if !LADYBIRD_APPLE
+    // GNUstep requires explicit app activation
+    [NSApp activateIgnoringOtherApps:YES];
+#endif
+
     auto const& browser_options = WebView::Application::browser_options();
 
     if (browser_options.devtools_port.has_value())
@@ -411,14 +416,19 @@
 
     Tab* tab = nil;
 
-    for (auto const& url : browser_options.urls) {
-        auto activate_tab = tab == nil ? Web::HTML::ActivateTab::Yes : Web::HTML::ActivateTab::No;
+    if (browser_options.urls.is_empty()) {
+        // No URLs provided, create a blank tab
+        [self createNewTab:Web::HTML::ActivateTab::Yes fromTab:nil];
+    } else {
+        for (auto const& url : browser_options.urls) {
+            auto activate_tab = tab == nil ? Web::HTML::ActivateTab::Yes : Web::HTML::ActivateTab::No;
 
-        auto* controller = [self createNewTab:url
-                                      fromTab:tab
-                                  activateTab:activate_tab];
+            auto* controller = [self createNewTab:url
+                                          fromTab:tab
+                                      activateTab:activate_tab];
 
-        tab = (Tab*)[controller window];
+            tab = (Tab*)[controller window];
+        }
     }
 }
 
