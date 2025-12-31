@@ -38,8 +38,11 @@ target_compile_features(ladybird_impl PUBLIC cxx_std_23)
 
 if(LADYBIRD_GNUSTEP)
     # GNUstep build configuration
+    # GNUSTEP_CFLAGS includes critical flags like -fobjc-runtime=gnustep-2.x for ARC support
     target_compile_definitions(ladybird_impl PUBLIC GNUSTEP=1)
     target_include_directories(ladybird_impl PUBLIC ${GNUSTEP_INCLUDE_DIRS})
+    separate_arguments(GNUSTEP_CFLAGS_LIST UNIX_COMMAND "${GNUSTEP_CFLAGS}")
+    target_compile_options(ladybird_impl PUBLIC ${GNUSTEP_CFLAGS_LIST})
     target_link_libraries(ladybird_impl PUBLIC ${GNUSTEP_LIBRARIES} LibUnicode)
 
     add_executable(ladybird
