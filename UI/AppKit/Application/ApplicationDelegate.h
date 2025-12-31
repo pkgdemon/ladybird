@@ -11,6 +11,7 @@
 #include <LibURL/URL.h>
 #include <LibWeb/HTML/ActivateTab.h>
 
+#import <Platform.h>
 #import <Cocoa/Cocoa.h>
 
 @class Tab;

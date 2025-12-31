@@ -43,6 +43,8 @@ if(LADYBIRD_GNUSTEP)
     target_include_directories(ladybird_impl PUBLIC ${GNUSTEP_INCLUDE_DIRS})
     separate_arguments(GNUSTEP_CFLAGS_LIST UNIX_COMMAND "${GNUSTEP_CFLAGS}")
     target_compile_options(ladybird_impl PUBLIC ${GNUSTEP_CFLAGS_LIST})
+    # Suppress warnings from GNUstep system headers (e.g., unused parameter in NSZone.h)
+    target_compile_options(ladybird_impl PUBLIC -Wno-unused-parameter)
     target_link_libraries(ladybird_impl PUBLIC ${GNUSTEP_LIBRARIES} LibUnicode)
 
     add_executable(ladybird

@@ -27,11 +27,26 @@ static constexpr CGFloat const INFO_BAR_PADDING = 8;
 - (instancetype)init
 {
     if (self = [super init]) {
+#if LADYBIRD_APPLE
         self.text_label = [NSTextField labelWithString:@""];
-
         self.dismiss_button = [NSButton buttonWithTitle:@""
                                                  target:self
                                                  action:@selector(dismiss:)];
+#else
+        // GNUstep: Create label manually
+        self.text_label = [[NSTextField alloc] init];
+        [self.text_label setStringValue:@""];
+        [self.text_label setBezeled:NO];
+        [self.text_label setDrawsBackground:NO];
+        [self.text_label setEditable:NO];
+        [self.text_label setSelectable:NO];
+
+        // GNUstep: Create button manually
+        self.dismiss_button = [[NSButton alloc] init];
+        [self.dismiss_button setTitle:@""];
+        [self.dismiss_button setTarget:self];
+        [self.dismiss_button setAction:@selector(dismiss:)];
+#endif
         [self.dismiss_button setBezelStyle:NSBezelStyleAccessoryBarAction];
 
 #if LADYBIRD_HAS_STACKVIEW

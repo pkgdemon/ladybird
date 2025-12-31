@@ -55,7 +55,9 @@ static constexpr auto POPOVER_PADDING = 6uz;
         [self.table_view setIntercellSpacing:NSMakeSize(0, 5)];
         [self.table_view setHeaderView:nil];
         [self.table_view setRefusesFirstResponder:YES];
+#if LADYBIRD_APPLE
         [self.table_view setRowSizeStyle:NSTableViewRowSizeStyleDefault];
+#endif
         [self.table_view addTableColumn:column];
         [self.table_view setDataSource:self];
         [self.table_view setDelegate:self];
@@ -229,7 +231,7 @@ static constexpr auto POPOVER_PADDING = 6uz;
     viewForTableColumn:(NSTableColumn*)table_column
                    row:(NSInteger)row
 {
-    NSTableCellView* view = [table_view makeViewWithIdentifier:AUTOCOMPLETE_IDENTIFIER owner:self];
+    NSTableCellView* view = (NSTableCellView*)[table_view makeViewWithIdentifier:AUTOCOMPLETE_IDENTIFIER owner:self];
 
     if (view == nil) {
         view = [[NSTableCellView alloc] initWithFrame:NSZeroRect];

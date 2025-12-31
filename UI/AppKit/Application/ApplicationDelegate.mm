@@ -179,7 +179,9 @@
     [controller showWindow:nil];
 
     if (tab) {
+#if LADYBIRD_HAS_TABGROUP
         [[tab tabGroup] addWindow:controller.window];
+#endif
 
         // FIXME: Can we create the tabbed window above without it becoming active in the first place?
         if (activate_tab == Web::HTML::ActivateTab::No) {
@@ -390,7 +392,9 @@
     auto* menu = [[NSMenuItem alloc] init];
     auto* submenu = [[NSMenu alloc] initWithTitle:@"Help"];
 
+#if LADYBIRD_APPLE
     [NSApp setHelpMenu:submenu];
+#endif
 
     [menu setSubmenu:submenu];
     return menu;

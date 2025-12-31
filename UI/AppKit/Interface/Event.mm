@@ -10,7 +10,10 @@
 #include <LibWeb/HTML/SelectedFile.h>
 #include <LibWeb/UIEvents/KeyCode.h>
 
-#import <Carbon/Carbon.h>
+#import <Platform.h>
+#if LADYBIRD_HAS_CARBON
+#    import <Carbon/Carbon.h>
+#endif
 #import <Interface/Event.h>
 #import <Utilities/Conversions.h>
 

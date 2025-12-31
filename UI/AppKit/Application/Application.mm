@@ -146,7 +146,12 @@ void Application::insert_clipboard_entry(Web::Clipboard::SystemClipboardRepresen
         return;
 
     auto* paste_board = [NSPasteboard generalPasteboard];
+#if LADYBIRD_APPLE
     [paste_board clearContents];
+#else
+    // GNUstep: clearContents not available, use declareTypes instead
+    [paste_board declareTypes:@[ pasteboard_type ] owner:nil];
+#endif
 
     [paste_board setData:Ladybird::string_to_ns_data(entry.data)
                  forType:pasteboard_type];

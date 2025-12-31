@@ -8,6 +8,7 @@
 
 #include <LibWebView/Application.h>
 
+#import <Platform.h>
 #import <Cocoa/Cocoa.h>
 
 namespace Ladybird {
