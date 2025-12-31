@@ -10,6 +10,7 @@
 #include <LibWebView/BrowserProcess.h>
 #include <LibWebView/URL.h>
 
+#import <Platform.h>
 #import <Application/Application.h>
 #import <Application/ApplicationDelegate.h>
 #import <Interface/Tab.h>
@@ -62,6 +63,18 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
 
         auto* delegate = [[ApplicationDelegate alloc] init];
         [NSApp setDelegate:delegate];
+
+#if !LADYBIRD_APPLE
+        // GNUstep: [NSApp run] doesn't trigger applicationDidFinishLaunching,
+        // so we call it manually before entering the run loop
+        NSLog(@"About to call applicationDidFinishLaunching from main");
+        @try {
+            [delegate applicationDidFinishLaunching:nil];
+            NSLog(@"applicationDidFinishLaunching completed");
+        } @catch (NSException* e) {
+            NSLog(@"Exception: %@ - %@", e.name, e.reason);
+        }
+#endif
     }
 
     return WebView::Application::the().execute();
