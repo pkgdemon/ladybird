@@ -1098,7 +1098,13 @@ struct HideCursor {
     if (bitmap_rep) {
         NSImage* image = [[NSImage alloc] initWithSize:NSMakeSize(width, height)];
         [image addRepresentation:bitmap_rep];
-        [image drawInRect:rect];
+        // Use respectFlipped:YES to properly handle the flipped coordinate system
+        [image drawInRect:rect
+                 fromRect:NSZeroRect
+                operation:NSCompositeCopy
+                 fraction:1.0
+           respectFlipped:YES
+                    hints:nil];
     }
 #endif
 

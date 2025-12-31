@@ -24,6 +24,7 @@
 #endif
 
 #include <signal.h>
+#include <sys/select.h>
 #include <sys/time.h>
 #include <sys/types.h>
 
@@ -69,11 +70,12 @@ struct ThreadData {
         CFRunLoopRef run_loop { nullptr };
     };
 #else
-    // GNUstep: Use NSTimer and NSFileHandle
+    // GNUstep: Use NSTimer for both timers and notifiers
+    // NSFileHandle notifications don't work well with sync IPC, so we use polling instead
     HashMap<int, NSTimer*> timers;
     struct NotifierState {
-        NSFileHandle* file_handle { nil };
-        id observer { nil };
+        int fd { -1 };
+        NSTimer* timer { nil };
     };
 #endif
     HashMap<Core::Notifier*, NotifierState> notifiers;
@@ -465,61 +467,48 @@ void EventLoopManagerAppKit::register_notifier(Core::Notifier& notifier)
 
     ThreadData::the().notifiers.set(&notifier, { socket, source, CFRunLoopGetCurrent() });
 #else
-    // GNUstep: Use NSFileHandle with notification center
+    // GNUstep: Use polling with a timer instead of NSFileHandle notifications.
+    // NSFileHandle notifications don't work well with sync IPC because they don't
+    // deliver nested notifications while inside a notification handler.
     auto weak_notifier = notifier.make_weak_ptr();
-    auto* file_handle = [[NSFileHandle alloc] initWithFileDescriptor:notifier.fd() closeOnDealloc:NO];
+    int fd = notifier.fd();
+    Core::Notifier::Type notifier_type = notifier.type();
 
-    // Note: waitForDataInBackgroundAndNotify posts NSFileHandleDataAvailableNotification,
-    // NOT NSFileHandleReadCompletionNotification. We must listen for the correct notification.
-    NSString* notification_name = nil;
-    switch (notifier.type()) {
-    case Core::Notifier::Type::Read:
-        notification_name = NSFileHandleDataAvailableNotification;
-        break;
-    case Core::Notifier::Type::Write:
-        // NSFileHandle doesn't have a direct write notification
-        // For write notifiers, we still need to handle them somehow
-        // This is a limitation of the GNUstep port - write notifications may not work correctly
-        notification_name = NSFileHandleDataAvailableNotification;
-        break;
-    default:
-        TODO();
-        break;
-    }
+    // Create a high-frequency timer to poll for data availability
+    // We use a short interval (1ms) to be responsive while avoiding busy-waiting
+    auto* timer = [NSTimer scheduledTimerWithTimeInterval:0.001
+                                                  repeats:YES
+                                                    block:^(NSTimer* t) {
+                                                        auto notifier_ref = weak_notifier.strong_ref();
+                                                        if (!notifier_ref) {
+                                                            [t invalidate];
+                                                            return;
+                                                        }
 
-    id observer = [[NSNotificationCenter defaultCenter]
-        addObserverForName:notification_name
-                    object:file_handle
-                     queue:nil
-                usingBlock:^(NSNotification* notification) {
-                    auto notifier_ref = weak_notifier.strong_ref();
-                    if (!notifier_ref)
-                        return;
+                                                        // Use select() to check if data is available
+                                                        fd_set fds;
+                                                        FD_ZERO(&fds);
+                                                        FD_SET(fd, &fds);
 
-                    // Re-register for next notification immediately
-                    if (notifier.type() == Core::Notifier::Type::Read) {
-                        [file_handle waitForDataInBackgroundAndNotify];
-                    }
+                                                        struct timeval tv = { 0, 0 }; // Non-blocking
 
-                    // Use a zero-delay timer to defer event dispatch outside the notification handler.
-                    // This is critical for sync IPC - the notification handler must return quickly
-                    // so that nested notifications (for sync IPC responses) can be delivered.
-                    [NSTimer scheduledTimerWithTimeInterval:0
-                                                   repeats:NO
-                                                     block:^(NSTimer* timer) {
-                                                         auto ref = weak_notifier.strong_ref();
-                                                         if (!ref)
-                                                             return;
-                                                         Core::NotifierActivationEvent ev;
-                                                         ref->dispatch_event(ev);
-                                                     }];
-                }];
+                                                        int result = 0;
+                                                        if (notifier_type == Core::Notifier::Type::Read) {
+                                                            result = select(fd + 1, &fds, nullptr, nullptr, &tv);
+                                                        } else if (notifier_type == Core::Notifier::Type::Write) {
+                                                            result = select(fd + 1, nullptr, &fds, nullptr, &tv);
+                                                        }
 
-    if (notifier.type() == Core::Notifier::Type::Read) {
-        [file_handle waitForDataInBackgroundAndNotify];
-    }
+                                                        if (result > 0 && FD_ISSET(fd, &fds)) {
+                                                            Core::NotifierActivationEvent event;
+                                                            notifier_ref->dispatch_event(event);
+                                                        }
+                                                    }];
 
-    ThreadData::the().notifiers.set(&notifier, { file_handle, observer });
+    // Ensure timer runs in common modes (including modal panels)
+    [[NSRunLoop currentRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
+
+    ThreadData::the().notifiers.set(&notifier, { fd, timer });
 #endif
     notifier.set_owner_thread(s_thread_id);
 }
@@ -536,7 +525,7 @@ void EventLoopManagerAppKit::unregister_notifier(Core::Notifier& notifier)
     CFRunLoopRemoveSource(state->run_loop, state->source, kCFRunLoopCommonModes);
     CFRelease(state->source);
 #else
-    [[NSNotificationCenter defaultCenter] removeObserver:state->observer];
+    [state->timer invalidate];
 #endif
 }
 
