@@ -1,17 +1,14 @@
 # Detect GNUstep vs macOS
+# LADYBIRD_USE_GNUSTEP is set early in lagom_options.cmake
 if(APPLE)
     set(LADYBIRD_GNUSTEP OFF)
+elseif(LADYBIRD_USE_GNUSTEP)
+    set(LADYBIRD_GNUSTEP ON)
+    # Re-run pkg_check_modules to get include dirs and libraries
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(GNUSTEP REQUIRED gnustep-base gnustep-gui)
 else()
-    # Check for GNUstep
-    find_package(PkgConfig)
-    if(PkgConfig_FOUND)
-        pkg_check_modules(GNUSTEP gnustep-base gnustep-gui)
-    endif()
-    if(GNUSTEP_FOUND)
-        set(LADYBIRD_GNUSTEP ON)
-    else()
-        message(FATAL_ERROR "GNUstep not found. Please install gnustep-base and gnustep-gui.")
-    endif()
+    message(FATAL_ERROR "GNUstep not found. Please install gnustep-base and gnustep-gui.")
 endif()
 
 add_library(ladybird_impl STATIC
@@ -48,6 +45,8 @@ if(LADYBIRD_GNUSTEP)
     add_executable(ladybird
         main.mm
     )
+    # create_ladybird_bundle handles resource file copying for non-Apple platforms
+    create_ladybird_bundle(ladybird)
 else()
     # macOS build configuration
     add_executable(ladybird MACOSX_BUNDLE

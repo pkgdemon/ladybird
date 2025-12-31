@@ -53,18 +53,12 @@ elseif (APPLE)
    add_subdirectory(AppKit)
 elseif(ANDROID)
    add_subdirectory(Android)
+elseif(LADYBIRD_USE_GNUSTEP)
+    # GNUstep was detected early in lagom_options.cmake
+    add_subdirectory(AppKit)
 else()
-    # Check for GNUstep on non-Apple systems
-    find_package(PkgConfig)
-    if(PkgConfig_FOUND)
-        pkg_check_modules(GNUSTEP gnustep-base gnustep-gui)
-    endif()
-    if(GNUSTEP_FOUND)
-        add_subdirectory(AppKit)
-    else()
-        # TODO: Check for other GUI frameworks here when we move them in-tree
-        return()
-    endif()
+    # TODO: Check for other GUI frameworks here when we move them in-tree
+    return()
 endif()
 
 if (NOT TARGET ladybird)

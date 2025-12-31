@@ -30,3 +30,17 @@ if (ANDROID OR APPLE)
 else()
     ladybird_option(ENABLE_QT ON CACHE BOOL "Build ladybird application using Qt GUI")
 endif()
+
+# Early GNUstep detection for non-Qt, non-Apple builds
+# This must happen before Libraries are configured so vulkan.cmake can check it
+set(LADYBIRD_USE_GNUSTEP OFF CACHE BOOL "" FORCE)
+if (NOT ENABLE_QT AND NOT APPLE AND NOT ANDROID)
+    find_package(PkgConfig QUIET)
+    if (PkgConfig_FOUND)
+        pkg_check_modules(GNUSTEP_EARLY QUIET gnustep-base gnustep-gui)
+        if (GNUSTEP_EARLY_FOUND)
+            set(LADYBIRD_USE_GNUSTEP ON CACHE BOOL "" FORCE)
+            message(STATUS "GNUstep detected - Vulkan GPU acceleration will be disabled")
+        endif()
+    endif()
+endif()
