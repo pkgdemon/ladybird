@@ -77,6 +77,10 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
 
 @property (nonatomic, assign) NSLayoutConstraint* location_toolbar_item_width;
 
+#if !LADYBIRD_APPLE
+@property (nonatomic, strong) NSTextField* gnustep_location_field;
+#endif
+
 @end
 
 @implementation TabController
@@ -214,14 +218,8 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
 #if LADYBIRD_APPLE
     [self.window makeFirstResponder:self.location_toolbar_item.view];
 #else
-    // GNUstep: Focus the first text field in the content view (our location bar)
-    for (NSView* subview in [[self.window contentView] subviews]) {
-        for (NSView* child in [subview subviews]) {
-            if ([child isKindOfClass:[NSTextField class]]) {
-                [self.window makeFirstResponder:child];
-                return;
-            }
-        }
+    if (self.gnustep_location_field) {
+        [self.window makeFirstResponder:self.gnustep_location_field];
     }
 #endif
 }
@@ -250,15 +248,19 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
 
     // Create the text field
     NSRect textFieldFrame = NSMakeRect(5, 3, contentFrame.size.width - 10, LOCATION_BAR_HEIGHT - 6);
-    NSTextField* locationField = [[NSTextField alloc] initWithFrame:textFieldFrame];
-    [locationField setAutoresizingMask:NSViewWidthSizable];
-    [locationField setPlaceholderString:@"Enter web address"];
-    [locationField setDelegate:self];
-    [locationField setEditable:YES];
-    [locationField setBezeled:YES];
-    [locationField setBezelStyle:NSTextFieldSquareBezel];
+    self.gnustep_location_field = [[NSTextField alloc] initWithFrame:textFieldFrame];
+    [self.gnustep_location_field setAutoresizingMask:NSViewWidthSizable];
+    [self.gnustep_location_field setPlaceholderString:@"Enter web address"];
+    [self.gnustep_location_field setDelegate:self];
+    [self.gnustep_location_field setEditable:YES];
+    [self.gnustep_location_field setBezeled:YES];
+    [self.gnustep_location_field setBezelStyle:NSTextFieldSquareBezel];
 
-    [locationBar addSubview:locationField];
+    // GNUstep: Set target/action for Enter key handling (doCommandBySelector: not called)
+    [self.gnustep_location_field setTarget:self];
+    [self.gnustep_location_field setAction:@selector(gnustepLocationFieldAction:)];
+
+    [locationBar addSubview:self.gnustep_location_field];
 
     // Add location bar to window
     [contentView addSubview:locationBar];
@@ -271,9 +273,18 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
             [subview setFrame:frame];
         }
     }
+}
 
-    // Store reference to location field for later use
-    // We'll use the existing location_toolbar_item infrastructure
+- (void)gnustepLocationFieldAction:(id)sender
+{
+    NSLog(@"gnustepLocationFieldAction: Enter pressed");
+    fflush(stderr);
+
+    auto location = Ladybird::ns_string_to_string([self.gnustep_location_field stringValue]);
+    NSLog(@"gnustepLocationFieldAction: navigating to: %s", location.to_byte_string().characters());
+    fflush(stderr);
+
+    [self navigateToLocation:move(location)];
 }
 #endif
 
@@ -709,6 +720,11 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
                textView:(NSTextView*)text_view
     doCommandBySelector:(SEL)selector
 {
+#if !LADYBIRD_APPLE
+    NSLog(@"doCommandBySelector: %@", NSStringFromSelector(selector));
+    fflush(stderr);
+#endif
+
     if (selector == @selector(cancelOperation:)) {
         if ([self.autocomplete close])
             return YES;
@@ -728,9 +744,23 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
         return NO;
     }
 
+#if !LADYBIRD_APPLE
+    NSLog(@"doCommandBySelector: handling insertNewline, navigating to URL");
+    fflush(stderr);
+#endif
+
     auto location = [self.autocomplete selectedSuggestion].value_or_lazy_evaluated([&]() {
+#if LADYBIRD_APPLE
         return Ladybird::ns_string_to_string([[text_view textStorage] string]);
+#else
+        return Ladybird::ns_string_to_string([self.gnustep_location_field stringValue]);
+#endif
     });
+
+#if !LADYBIRD_APPLE
+    NSLog(@"doCommandBySelector: navigating to: %s", location.to_byte_string().characters());
+    fflush(stderr);
+#endif
 
     [self navigateToLocation:move(location)];
     return YES;
@@ -738,17 +768,23 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
 
 - (void)controlTextDidEndEditing:(NSNotification*)notification
 {
+#if LADYBIRD_APPLE
     auto* location_search_field = (LocationSearchField*)[self.location_toolbar_item view];
-
     auto url_string = Ladybird::ns_string_to_string([location_search_field stringValue]);
+#else
+    auto url_string = Ladybird::ns_string_to_string([self.gnustep_location_field stringValue]);
+#endif
     [self setLocationFieldText:url_string];
 }
 
 - (void)controlTextDidChange:(NSNotification*)notification
 {
+#if LADYBIRD_APPLE
     auto* location_search_field = (LocationSearchField*)[self.location_toolbar_item view];
-
     auto url_string = Ladybird::ns_string_to_string([location_search_field stringValue]);
+#else
+    auto url_string = Ladybird::ns_string_to_string([self.gnustep_location_field stringValue]);
+#endif
     m_autocomplete->query_autocomplete_engine(move(url_string));
 }
 

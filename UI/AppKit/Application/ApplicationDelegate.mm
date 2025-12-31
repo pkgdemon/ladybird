@@ -24,6 +24,7 @@
 #if !LADYBIRD_APPLE
 // GNUstep: Need to explicitly retain windows to prevent ARC deallocation
 @property (nonatomic, strong) NSMutableArray<Tab*>* managed_windows;
+@property (nonatomic, assign) BOOL hasFinishedLaunching;
 #endif
 @property (nonatomic, weak) Tab* active_tab;
 
@@ -61,6 +62,7 @@
         self.managed_tabs = [[NSMutableArray alloc] init];
 #if !LADYBIRD_APPLE
         self.managed_windows = [[NSMutableArray alloc] init];
+        self.hasFinishedLaunching = NO;
 #endif
 
         // Reduce the tooltip delay, as the default delay feels quite long.
@@ -451,6 +453,15 @@
 - (void)applicationDidFinishLaunching:(NSNotification*)notification
 {
 #if !LADYBIRD_APPLE
+    // Guard against being called multiple times (GNUstep may call this automatically
+    // in addition to our manual call from main.mm)
+    if (self.hasFinishedLaunching) {
+        NSLog(@"applicationDidFinishLaunching: already launched, skipping");
+        fflush(stderr);
+        return;
+    }
+    self.hasFinishedLaunching = YES;
+
     NSLog(@"applicationDidFinishLaunching: start");
     // GNUstep requires explicit app activation
     [NSApp activateIgnoringOtherApps:YES];
