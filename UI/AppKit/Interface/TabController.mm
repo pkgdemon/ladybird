@@ -9,6 +9,7 @@
 #include <LibWebView/URL.h>
 #include <LibWebView/ViewImplementation.h>
 
+#import <Platform.h>
 #import <Application/ApplicationDelegate.h>
 #import <Interface/Autocomplete.h>
 #import <Interface/LadybirdWebView.h>
@@ -48,7 +49,11 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
 
 @end
 
+#if LADYBIRD_APPLE
 @interface TabController () <NSToolbarDelegate, NSSearchFieldDelegate, AutocompleteObserver>
+#else
+@interface TabController () <NSToolbarDelegate, NSTextFieldDelegate, AutocompleteObserver>
+#endif
 {
     u64 m_page_index;
 
@@ -173,13 +178,17 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
 {
     auto* delegate = (ApplicationDelegate*)[NSApp delegate];
 
+#if LADYBIRD_APPLE
     self.tab.titlebarAppearsTransparent = NO;
+#endif
 
     [delegate createNewTab:WebView::Application::settings().new_tab_page_url()
                    fromTab:[self tab]
                activateTab:Web::HTML::ActivateTab::Yes];
 
+#if LADYBIRD_APPLE
     self.tab.titlebarAppearsTransparent = YES;
+#endif
 }
 
 - (void)setLocationFieldText:(StringView)url
@@ -235,20 +244,37 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
 
 - (void)showTabOverview:(id)sender
 {
+#if LADYBIRD_APPLE
     self.tab.titlebarAppearsTransparent = NO;
     [self.window toggleTabOverview:sender];
     self.tab.titlebarAppearsTransparent = YES;
+#else
+    // GNUstep: Tab overview not available
+    (void)sender;
+#endif
 }
 
 #pragma mark - Properties
 
+#if LADYBIRD_APPLE
 - (NSButton*)create_button:(NSImageName)image
+#else
+- (NSButton*)create_button:(NSString*)image
+#endif
                with_action:(nonnull SEL)action
               with_tooltip:(NSString*)tooltip
 {
+#if LADYBIRD_APPLE
     auto* button = [NSButton buttonWithImage:[NSImage imageNamed:image]
                                       target:self
                                       action:action];
+#else
+    NSButton* button = [[NSButton alloc] init];
+    [button setImage:[NSImage imageNamed:image]];
+    [button setTarget:self];
+    [button setAction:action];
+    [button setBordered:NO];
+#endif
     if (tooltip) {
         [button setToolTip:tooltip];
     }
@@ -328,9 +354,19 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
 - (NSToolbarItem*)new_tab_toolbar_item
 {
     if (!_new_tab_toolbar_item) {
+#if LADYBIRD_APPLE
         auto* button = [self create_button:NSImageNameAddTemplate
                                with_action:@selector(createNewTab:)
                               with_tooltip:@"New tab"];
+#else
+        // GNUstep: Use text button since NSImageNameAddTemplate not available
+        NSButton* button = [[NSButton alloc] init];
+        [button setTitle:@"+"];
+        [button setTarget:self];
+        [button setAction:@selector(createNewTab:)];
+        [button setToolTip:@"New tab"];
+        [button setBordered:YES];
+#endif
 
         _new_tab_toolbar_item = [[NSToolbarItem alloc] initWithItemIdentifier:TOOLBAR_NEW_TAB_IDENTIFIER];
         [_new_tab_toolbar_item setView:button];
@@ -342,9 +378,19 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
 - (NSToolbarItem*)tab_overview_toolbar_item
 {
     if (!_tab_overview_toolbar_item) {
+#if LADYBIRD_APPLE
         auto* button = [self create_button:NSImageNameIconViewTemplate
                                with_action:@selector(showTabOverview:)
                               with_tooltip:@"Show all tabs"];
+#else
+        // GNUstep: Use text button since NSImageNameIconViewTemplate not available
+        NSButton* button = [[NSButton alloc] init];
+        [button setTitle:@"Tabs"];
+        [button setTarget:self];
+        [button setAction:@selector(showTabOverview:)];
+        [button setToolTip:@"Show all tabs"];
+        [button setBordered:YES];
+#endif
 
         _tab_overview_toolbar_item = [[NSToolbarItem alloc] initWithItemIdentifier:TOOLBAR_TAB_OVERVIEW_IDENTIFIER];
         [_tab_overview_toolbar_item setView:button];
@@ -383,7 +429,9 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
     [self.window setDelegate:self];
 
     [self.window setToolbar:self.toolbar];
+#if LADYBIRD_APPLE
     [self.window setToolbarStyle:NSWindowToolbarStyleUnified];
+#endif
 
     [self.window makeKeyAndOrderFront:sender];
 
@@ -415,6 +463,7 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
 
 - (void)windowDidResize:(NSNotification*)notification
 {
+#if LADYBIRD_APPLE
     if (self.location_toolbar_item_width != nil) {
         self.location_toolbar_item_width.active = NO;
     }
@@ -422,6 +471,7 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
     auto width = [self window].frame.size.width * 0.6;
     self.location_toolbar_item_width = [[[self.location_toolbar_item view] widthAnchor] constraintEqualToConstant:width];
     self.location_toolbar_item_width.active = YES;
+#endif
 
     [[[self tab] web_view] handleResize];
 }

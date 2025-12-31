@@ -45,7 +45,11 @@ if(LADYBIRD_GNUSTEP)
     target_compile_options(ladybird_impl PUBLIC ${GNUSTEP_CFLAGS_LIST})
     # Suppress warnings from GNUstep system headers (e.g., unused parameter in NSZone.h)
     target_compile_options(ladybird_impl PUBLIC -Wno-unused-parameter)
-    target_link_libraries(ladybird_impl PUBLIC ${GNUSTEP_LIBRARIES} LibUnicode)
+    # Add library directories so linker can find gnustep-base, gnustep-gui
+    target_link_directories(ladybird_impl PUBLIC ${GNUSTEP_LIBRARY_DIRS})
+    # Note: gnustep-gui pkg-config is misconfigured and doesn't include -lgnustep-gui,
+    # so we add it explicitly along with gnustep-base
+    target_link_libraries(ladybird_impl PUBLIC ${GNUSTEP_LIBRARIES} gnustep-gui gnustep-base objc LibUnicode)
 
     add_executable(ladybird
         main.mm

@@ -1063,7 +1063,7 @@ struct HideCursor {
                         hasAlpha:YES
                         isPlanar:NO
                   colorSpaceName:NSDeviceRGBColorSpace
-                    bitmapFormat:NSBitmapFormatAlphaFirst | NSBitmapFormatThirtyTwoBitLittleEndian
+                    bitmapFormat:(NSBitmapFormat)(NSBitmapFormatAlphaFirst | NSBitmapFormatThirtyTwoBitLittleEndian)
                      bytesPerRow:bitmap.pitch()
                     bitsPerPixel:BITS_PER_PIXEL];
 

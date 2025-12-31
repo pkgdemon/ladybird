@@ -40,7 +40,8 @@ static constexpr CGFloat const SEARCH_PANEL_HEIGHT = 30;
 
 + (NSImage*)defaultFavicon
 {
-    static NSImage* default_favicon;
+    static NSImage* default_favicon = nil;
+#if LADYBIRD_APPLE
     static dispatch_once_t token;
 
     dispatch_once(&token, ^{
@@ -49,6 +50,15 @@ static constexpr CGFloat const SEARCH_PANEL_HEIGHT = 30;
 
         default_favicon = [[NSImage alloc] initWithContentsOfFile:ns_default_favicon_path];
     });
+#else
+    // GNUstep: Use simple lazy initialization (thread safety not critical for UI)
+    if (default_favicon == nil) {
+        auto default_favicon_path = MUST(Core::Resource::load_from_uri("resource://icons/48x48/app-browser.png"sv));
+        auto* ns_default_favicon_path = Ladybird::string_to_ns_string(default_favicon_path->filesystem_path());
+
+        default_favicon = [[NSImage alloc] initWithContentsOfFile:ns_default_favicon_path];
+    }
+#endif
 
     return default_favicon;
 }
@@ -81,7 +91,9 @@ static constexpr CGFloat const SEARCH_PANEL_HEIGHT = 30;
         self.title = @"New Tab";
         [self updateTabTitleAndFavicon];
 
+#if LADYBIRD_APPLE
         [self setTitleVisibility:NSWindowTitleHidden];
+#endif
         [self setIsVisible:YES];
 
         self.search_panel = [[SearchPanel alloc] init];
@@ -174,6 +186,7 @@ static constexpr CGFloat const SEARCH_PANEL_HEIGHT = 30;
 
 - (void)updateTabTitleAndFavicon
 {
+#if LADYBIRD_HAS_TABGROUP
     static constexpr CGFloat TITLE_FONT_SIZE = 12;
     static constexpr CGFloat FAVICON_SIZE = 16;
 
@@ -211,6 +224,10 @@ static constexpr CGFloat const SEARCH_PANEL_HEIGHT = 30;
     [title_and_favicon appendAttributedString:title_attribute];
 
     [[self tab] setAttributedTitle:title_and_favicon];
+#else
+    // GNUstep: Just set window title
+    [self setTitle:self.title];
+#endif
 }
 
 - (void)togglePageMuteState:(id)button
@@ -220,7 +237,9 @@ static constexpr CGFloat const SEARCH_PANEL_HEIGHT = 30;
 
     switch (view.audio_play_state()) {
     case Web::HTML::AudioPlayState::Paused:
+#if LADYBIRD_HAS_TABGROUP
         [[self tab] setAccessoryView:nil];
+#endif
         break;
 
     case Web::HTML::AudioPlayState::Playing:
@@ -236,9 +255,17 @@ static constexpr CGFloat const SEARCH_PANEL_HEIGHT = 30;
 
     switch (view.page_mute_state()) {
     case Web::HTML::MuteState::Muted:
+#if LADYBIRD_APPLE
         return [NSImage imageNamed:NSImageNameTouchBarAudioOutputVolumeOffTemplate];
+#else
+        return nil; // GNUstep: TouchBar images not available
+#endif
     case Web::HTML::MuteState::Unmuted:
+#if LADYBIRD_APPLE
         return [NSImage imageNamed:NSImageNameTouchBarAudioOutputVolumeHighTemplate];
+#else
+        return nil; // GNUstep: TouchBar images not available
+#endif
     }
 
     VERIFY_NOT_REACHED();
@@ -315,13 +342,16 @@ static constexpr CGFloat const SEARCH_PANEL_HEIGHT = 30;
 - (void)onFaviconChange:(Gfx::Bitmap const&)bitmap
 {
     auto* favicon = Ladybird::gfx_bitmap_to_ns_image(bitmap);
+#if LADYBIRD_APPLE
     [favicon setResizingMode:NSImageResizingModeStretch];
+#endif
     self.favicon = favicon;
     [self updateTabTitleAndFavicon];
 }
 
 - (void)onAudioPlayStateChange:(Web::HTML::AudioPlayState)play_state
 {
+#if LADYBIRD_HAS_TABGROUP
     auto& view = [[self web_view] view];
 
     switch (play_state) {
@@ -340,6 +370,10 @@ static constexpr CGFloat const SEARCH_PANEL_HEIGHT = 30;
         [[self tab] setAccessoryView:button];
         break;
     }
+#else
+    // GNUstep: Tab accessory views not supported
+    (void)play_state;
+#endif
 }
 
 - (void)onFindInPageResult:(size_t)current_match_index

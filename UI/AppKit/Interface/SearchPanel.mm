@@ -6,6 +6,7 @@
 
 #include <Interface/LadybirdWebViewBridge.h>
 
+#import <Platform.h>
 #import <Interface/LadybirdWebView.h>
 #import <Interface/SearchPanel.h>
 #import <Interface/Tab.h>
@@ -15,11 +16,17 @@
 #    error "This project requires ARC"
 #endif
 
+#if LADYBIRD_HAS_STACKVIEW
 static constexpr CGFloat const SEARCH_FIELD_HEIGHT = 30;
+#endif
 static constexpr CGFloat const SEARCH_FIELD_WIDTH = 300;
 static constexpr CGFloat const SEARCH_PANEL_PADDING = 8;
 
+#if LADYBIRD_APPLE
 @interface SearchPanel () <NSSearchFieldDelegate>
+#else
+@interface SearchPanel () <NSTextFieldDelegate>
+#endif
 {
     CaseSensitivity m_case_sensitivity;
 }
@@ -42,30 +49,68 @@ static constexpr CGFloat const SEARCH_PANEL_PADDING = 8;
         [self.search_field setPlaceholderString:@"Search"];
         [self.search_field setDelegate:self];
 
+#if LADYBIRD_APPLE
         self.search_previous = [NSButton buttonWithImage:[NSImage imageNamed:NSImageNameGoLeftTemplate]
                                                   target:self
                                                   action:@selector(findPreviousMatch:)];
+#else
+        self.search_previous = [[NSButton alloc] init];
+        [self.search_previous setTitle:@"<"];
+        [self.search_previous setTarget:self];
+        [self.search_previous setAction:@selector(findPreviousMatch:)];
+#endif
         [self.search_previous setToolTip:@"Find Previous Match"];
         [self.search_previous setBordered:NO];
 
+#if LADYBIRD_APPLE
         self.search_next = [NSButton buttonWithImage:[NSImage imageNamed:NSImageNameGoRightTemplate]
                                               target:self
                                               action:@selector(findNextMatch:)];
+#else
+        self.search_next = [[NSButton alloc] init];
+        [self.search_next setTitle:@">"];
+        [self.search_next setTarget:self];
+        [self.search_next setAction:@selector(findNextMatch:)];
+#endif
         [self.search_next setToolTip:@"Find Next Match"];
         [self.search_next setBordered:NO];
 
+#if LADYBIRD_APPLE
         self.search_match_case = [NSButton checkboxWithTitle:@"Match Case"
                                                       target:self
                                                       action:@selector(find:)];
+#else
+        self.search_match_case = [[NSButton alloc] init];
+        [self.search_match_case setButtonType:NSSwitchButton];
+        [self.search_match_case setTitle:@"Match Case"];
+        [self.search_match_case setTarget:self];
+        [self.search_match_case setAction:@selector(find:)];
+#endif
         [self.search_match_case setState:NSControlStateValueOff];
         m_case_sensitivity = CaseSensitivity::CaseInsensitive;
 
+#if LADYBIRD_APPLE
         self.result_label = [NSTextField labelWithString:@""];
+#else
+        self.result_label = [[NSTextField alloc] init];
+        [self.result_label setStringValue:@""];
+        [self.result_label setEditable:NO];
+        [self.result_label setSelectable:NO];
+        [self.result_label setBezeled:NO];
+        [self.result_label setDrawsBackground:NO];
+#endif
         [self.result_label setHidden:YES];
 
+#if LADYBIRD_APPLE
         self.search_done = [NSButton buttonWithTitle:@"Done"
                                               target:self
                                               action:@selector(cancelSearch:)];
+#else
+        self.search_done = [[NSButton alloc] init];
+        [self.search_done setTitle:@"Done"];
+        [self.search_done setTarget:self];
+        [self.search_done setAction:@selector(cancelSearch:)];
+#endif
         [self.search_done setToolTip:@"Close Search Bar"];
         [self.search_done setBezelStyle:NSBezelStyleAccessoryBarAction];
 
@@ -216,14 +261,24 @@ static constexpr CGFloat const SEARCH_PANEL_PADDING = 8;
 
 - (void)setPasteBoardContents:(NSString*)query
 {
+#if LADYBIRD_APPLE
     auto* paste_board = [NSPasteboard pasteboardWithName:NSPasteboardNameFind];
     [paste_board clearContents];
     [paste_board setString:query forType:NSPasteboardTypeString];
+#else
+    auto* paste_board = [NSPasteboard pasteboardWithName:NSFindPboard];
+    [paste_board declareTypes:@[ NSPasteboardTypeString ] owner:nil];
+    [paste_board setString:query forType:NSPasteboardTypeString];
+#endif
 }
 
 - (BOOL)setSearchTextFromPasteBoard
 {
+#if LADYBIRD_APPLE
     auto* paste_board = [NSPasteboard pasteboardWithName:NSPasteboardNameFind];
+#else
+    auto* paste_board = [NSPasteboard pasteboardWithName:NSFindPboard];
+#endif
     auto* query = [paste_board stringForType:NSPasteboardTypeString];
 
     if (query) {
