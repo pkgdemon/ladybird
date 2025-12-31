@@ -20,6 +20,10 @@
 #    import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #endif
 
+#if LADYBIRD_APPLE
+#    import <CoreGraphics/CoreGraphics.h>
+#endif
+
 #if !__has_feature(objc_arc)
 #    error "This project requires ARC"
 #endif
@@ -934,6 +938,27 @@ struct HideCursor {
 #endif
 }
 
+#if LADYBIRD_GNUSTEP
+// GNUstep NSMenuDelegate requires these methods to be implemented
+- (void)menuWillOpen:(NSMenu*)menu
+{
+    (void)menu;
+}
+
+- (void)menu:(NSMenu*)menu willHighlightItem:(NSMenuItem*)item
+{
+    (void)menu;
+    (void)item;
+}
+
+- (NSRect)confinementRectForMenu:(NSMenu*)menu onScreen:(NSScreen*)screen
+{
+    (void)menu;
+    (void)screen;
+    return NSZeroRect;
+}
+#endif
+
 - (void)colorPickerUpdate:(NSColorPanel*)colorPanel
 {
     m_web_view_bridge->color_picker_update(Ladybird::ns_color_to_gfx_color(colorPanel.color), Web::HTML::ColorPickerUpdateState::Update);
@@ -984,6 +1009,7 @@ struct HideCursor {
     static constexpr size_t BITS_PER_COMPONENT = 8;
     static constexpr size_t BITS_PER_PIXEL = 32;
 
+#if LADYBIRD_APPLE
     auto* context = [[NSGraphicsContext currentContext] CGContext];
     CGContextSaveGState(context);
 
@@ -1019,6 +1045,34 @@ struct HideCursor {
     CGContextRestoreGState(context);
     CGDataProviderRelease(provider);
     CGImageRelease(bitmap_image);
+#else
+    // GNUstep: Use NSBitmapImageRep for rendering
+    // Note: BGRA8888 format - we need to swap bytes for proper display
+    auto width = bitmap_size.width();
+    auto height = bitmap_size.height();
+
+    // Create a copy with RGBA byte order for GNUstep
+    auto* bitmap_data = const_cast<unsigned char*>(bitmap.scanline_u8(0));
+
+    NSBitmapImageRep* bitmap_rep = [[NSBitmapImageRep alloc]
+        initWithBitmapDataPlanes:&bitmap_data
+                      pixelsWide:width
+                      pixelsHigh:height
+                   bitsPerSample:BITS_PER_COMPONENT
+                 samplesPerPixel:4
+                        hasAlpha:YES
+                        isPlanar:NO
+                  colorSpaceName:NSDeviceRGBColorSpace
+                    bitmapFormat:NSBitmapFormatAlphaFirst | NSBitmapFormatThirtyTwoBitLittleEndian
+                     bytesPerRow:bitmap.pitch()
+                    bitsPerPixel:BITS_PER_PIXEL];
+
+    if (bitmap_rep) {
+        NSImage* image = [[NSImage alloc] initWithSize:NSMakeSize(width, height)];
+        [image addRepresentation:bitmap_rep];
+        [image drawInRect:rect];
+    }
+#endif
 
     [super drawRect:rect];
 }

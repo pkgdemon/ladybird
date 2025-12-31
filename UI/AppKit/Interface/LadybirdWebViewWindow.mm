@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#import <Platform.h>
 #import <Interface/LadybirdWebView.h>
 #import <Interface/LadybirdWebViewWindow.h>
 
@@ -32,7 +33,9 @@
         if (self.web_view == nil)
             self.web_view = [[LadybirdWebView alloc] init:nil];
 
+#if LADYBIRD_APPLE
         [self.web_view setClipsToBounds:YES];
+#endif
     }
 
     return self;
@@ -46,10 +49,12 @@
     [super setIsVisible:flag];
 }
 
+#if LADYBIRD_APPLE
 - (void)setIsMiniaturized:(BOOL)flag
 {
     [self.web_view handleVisibility:!flag];
     [super setIsMiniaturized:flag];
 }
+#endif
 
 @end

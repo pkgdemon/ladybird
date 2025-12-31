@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#import <Platform.h>
 #import <Interface/Event.h>
 #import <Interface/LadybirdWebView.h>
 #import <Interface/Menu.h>
@@ -298,6 +299,7 @@ NSButton* create_application_button(WebView::Action& action)
 
 void set_control_image(id control, NSString* image)
 {
+#if LADYBIRD_APPLE
     // System symbols are distributed with the San Fransisco (SF) Symbols font. To see all SF Symbols and their names,
     // you will have to install the SF Symbols app: https://developer.apple.com/sf-symbols/
     auto set_image = [&]() {
@@ -310,6 +312,11 @@ void set_control_image(id control, NSString* image)
         if ([control isKindOfClass:[NSButton class]])
             set_image();
     }
+#else
+    // GNUstep: SF Symbols not available, skip image setting
+    (void)control;
+    (void)image;
+#endif
 }
 
 }
