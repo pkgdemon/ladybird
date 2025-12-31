@@ -91,7 +91,9 @@ public:
 
     virtual void on_visible_state_changed(WebView::Action& action) override
     {
-        [m_control setHidden:!action.visible()];
+        // NSMenuItem doesn't have setHidden: on GNUstep, only NSView subclasses do
+        if ([m_control respondsToSelector:@selector(setHidden:)])
+            [m_control setHidden:!action.visible()];
 
         if ([m_control isKindOfClass:[NSButton class]])
             [m_control setBordered:action.visible()];
