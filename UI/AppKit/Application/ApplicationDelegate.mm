@@ -49,6 +49,14 @@
     if (self = [super init]) {
         [NSApp setMainMenu:[[NSMenu alloc] init]];
 
+#if !LADYBIRD_APPLE
+        // On GNUstep, remove any automatic application menu items that were added
+        // before we set up our own menus
+        while ([[NSApp mainMenu] numberOfItems] > 0) {
+            [[NSApp mainMenu] removeItemAtIndex:0];
+        }
+#endif
+
         [[NSApp mainMenu] addItem:[self createApplicationMenu]];
         [[NSApp mainMenu] addItem:[self createFileMenu]];
         [[NSApp mainMenu] addItem:[self createEditMenu]];
