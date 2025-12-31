@@ -41,6 +41,16 @@ if (NOT ENABLE_QT AND NOT APPLE AND NOT ANDROID)
         if (GNUSTEP_EARLY_FOUND)
             set(LADYBIRD_USE_GNUSTEP ON CACHE BOOL "" FORCE)
             message(STATUS "GNUstep detected - Vulkan GPU acceleration will be disabled")
+
+            # GNUstep requires Clang for proper Objective-C support (ARC, blocks, etc.)
+            if (NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND NOT CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+                message(FATAL_ERROR
+                    "GNUstep builds require Clang. You are using ${CMAKE_CXX_COMPILER_ID}.\n"
+                    "Please configure with Clang:\n"
+                    "  CC=clang CXX=clang++ cmake --preset Release -DENABLE_QT=OFF\n"
+                    "Or set the compilers explicitly:\n"
+                    "  cmake --preset Release -DENABLE_QT=OFF -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++")
+            endif()
         endif()
     endif()
 endif()
