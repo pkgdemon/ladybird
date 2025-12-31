@@ -214,8 +214,15 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
 #if LADYBIRD_APPLE
     [self.window makeFirstResponder:self.location_toolbar_item.view];
 #else
-    // GNUstep: Toolbar not used, focus the web view instead
-    [self.window makeFirstResponder:[self tab].web_view];
+    // GNUstep: Focus the first text field in the content view (our location bar)
+    for (NSView* subview in [[self.window contentView] subviews]) {
+        for (NSView* child in [subview subviews]) {
+            if ([child isKindOfClass:[NSTextField class]]) {
+                [self.window makeFirstResponder:child];
+                return;
+            }
+        }
+    }
 #endif
 }
 
@@ -225,6 +232,50 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
 {
     return (Tab*)[self window];
 }
+
+#if !LADYBIRD_APPLE
+- (void)setupGNUstepLocationBar
+{
+    // Create a simple location bar at the top of the window
+    static constexpr CGFloat LOCATION_BAR_HEIGHT = 30;
+
+    NSView* contentView = [self.window contentView];
+    NSRect contentFrame = [contentView frame];
+
+    // Create container for location bar
+    NSRect locationBarFrame = NSMakeRect(0, contentFrame.size.height - LOCATION_BAR_HEIGHT,
+                                         contentFrame.size.width, LOCATION_BAR_HEIGHT);
+    NSView* locationBar = [[NSView alloc] initWithFrame:locationBarFrame];
+    [locationBar setAutoresizingMask:NSViewWidthSizable | NSViewMinYMargin];
+
+    // Create the text field
+    NSRect textFieldFrame = NSMakeRect(5, 3, contentFrame.size.width - 10, LOCATION_BAR_HEIGHT - 6);
+    NSTextField* locationField = [[NSTextField alloc] initWithFrame:textFieldFrame];
+    [locationField setAutoresizingMask:NSViewWidthSizable];
+    [locationField setPlaceholderString:@"Enter web address"];
+    [locationField setDelegate:self];
+    [locationField setEditable:YES];
+    [locationField setBezeled:YES];
+    [locationField setBezelStyle:NSTextFieldSquareBezel];
+
+    [locationBar addSubview:locationField];
+
+    // Add location bar to window
+    [contentView addSubview:locationBar];
+
+    // Adjust existing content view children to make room
+    for (NSView* subview in [contentView subviews]) {
+        if (subview != locationBar) {
+            NSRect frame = [subview frame];
+            frame.size.height = contentFrame.size.height - LOCATION_BAR_HEIGHT;
+            [subview setFrame:frame];
+        }
+    }
+
+    // Store reference to location field for later use
+    // We'll use the existing location_toolbar_item infrastructure
+}
+#endif
 
 - (void)createNewTab:(id)sender
 {
@@ -454,6 +505,7 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
 - (NSArray*)toolbar_identifiers
 {
     if (!_toolbar_identifiers) {
+#if LADYBIRD_APPLE
         _toolbar_identifiers = @[
             TOOLBAR_NAVIGATE_BACK_IDENTIFIER,
             TOOLBAR_NAVIGATE_FORWARD_IDENTIFIER,
@@ -465,6 +517,12 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
             TOOLBAR_NEW_TAB_IDENTIFIER,
             TOOLBAR_TAB_OVERVIEW_IDENTIFIER,
         ];
+#else
+        // GNUstep: Use minimal toolbar to avoid hangs
+        _toolbar_identifiers = @[
+            TOOLBAR_LOCATION_IDENTIFIER,
+        ];
+#endif
     }
 
     return _toolbar_identifiers;
@@ -499,9 +557,11 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
     [self.window setToolbar:self.toolbar];
     [self.window setToolbarStyle:NSWindowToolbarStyleUnified];
 #else
-    // GNUstep: Skip toolbar for now - it causes a hang
-    // TODO: Debug toolbar attachment issue on GNUstep
-    NSLog(@"showWindow: skipping toolbar on GNUstep");
+    // GNUstep: NSToolbar causes hangs, use a custom location bar instead
+    NSLog(@"showWindow: creating custom location bar for GNUstep");
+    fflush(stderr);
+    [self setupGNUstepLocationBar];
+    NSLog(@"showWindow: custom location bar created");
     fflush(stderr);
 #endif
 
