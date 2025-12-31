@@ -67,13 +67,7 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
 #if !LADYBIRD_APPLE
         // GNUstep: [NSApp run] doesn't trigger applicationDidFinishLaunching,
         // so we call it manually before entering the run loop
-        NSLog(@"About to call applicationDidFinishLaunching from main");
-        @try {
-            [delegate applicationDidFinishLaunching:nil];
-            NSLog(@"applicationDidFinishLaunching completed");
-        } @catch (NSException* e) {
-            NSLog(@"Exception: %@ - %@", e.name, e.reason);
-        }
+        [delegate applicationDidFinishLaunching:nil];
 #endif
     }
 

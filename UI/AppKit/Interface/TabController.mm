@@ -92,12 +92,39 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
 
 - (instancetype)init
 {
+#if !LADYBIRD_APPLE
+    NSLog(@"TabController init: starting");
+    fflush(stderr);
+#endif
     if (self = [super init]) {
+#if !LADYBIRD_APPLE
+        NSLog(@"TabController init: super init done");
+        fflush(stderr);
+#endif
         __weak TabController* weak_self = self;
 
+#if !LADYBIRD_APPLE
+        NSLog(@"TabController init: creating toolbar");
+        fflush(stderr);
+#endif
         self.toolbar = [[NSToolbar alloc] initWithIdentifier:TOOLBAR_IDENTIFIER];
+#if !LADYBIRD_APPLE
+        NSLog(@"TabController init: toolbar alloc done");
+        fflush(stderr);
+        // GNUstep: Defer setting delegate until showWindow: to avoid
+        // accessing [self tab] before the window exists
+#else
         [self.toolbar setDelegate:self];
+#endif
+#if !LADYBIRD_APPLE
+        NSLog(@"TabController init: delegate handling done");
+        fflush(stderr);
+#endif
         [self.toolbar setDisplayMode:NSToolbarDisplayModeIconOnly];
+#if !LADYBIRD_APPLE
+        NSLog(@"TabController init: setDisplayMode done");
+        fflush(stderr);
+#endif
         if (@available(macOS 15, *)) {
             if ([self.toolbar respondsToSelector:@selector(setAllowsDisplayModeCustomization:)]) {
                 [self.toolbar performSelector:@selector(setAllowsDisplayModeCustomization:) withObject:nil];
@@ -105,11 +132,27 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
         }
         [self.toolbar setAllowsUserCustomization:NO];
         [self.toolbar setSizeMode:NSToolbarSizeModeRegular];
+#if !LADYBIRD_APPLE
+        NSLog(@"TabController init: toolbar created");
+        fflush(stderr);
+#endif
 
         m_page_index = 0;
 
+#if !LADYBIRD_APPLE
+        NSLog(@"TabController init: creating autocomplete");
+        fflush(stderr);
+#endif
         self.autocomplete = [[Autocomplete alloc] init:self withToolbarItem:self.location_toolbar_item];
+#if !LADYBIRD_APPLE
+        NSLog(@"TabController init: autocomplete created, creating m_autocomplete");
+        fflush(stderr);
+#endif
         m_autocomplete = make<WebView::Autocomplete>();
+#if !LADYBIRD_APPLE
+        NSLog(@"TabController init: m_autocomplete created");
+        fflush(stderr);
+#endif
 
         m_autocomplete->on_autocomplete_query_complete = [weak_self](auto suggestions) {
             TabController* self = weak_self;
@@ -119,6 +162,10 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
 
             [self.autocomplete showWithSuggestions:move(suggestions)];
         };
+#if !LADYBIRD_APPLE
+        NSLog(@"TabController init: complete");
+        fflush(stderr);
+#endif
     }
 
     return self;
@@ -422,13 +469,37 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
 
 - (IBAction)showWindow:(id)sender
 {
+#if !LADYBIRD_APPLE
+    NSLog(@"showWindow: starting");
+    fflush(stderr);
+#endif
     self.window = self.parent
         ? [[Tab alloc] initAsChild:self.parent pageIndex:m_page_index]
         : [[Tab alloc] init];
+#if !LADYBIRD_APPLE
+    NSLog(@"showWindow: Tab created");
+    fflush(stderr);
+#endif
 
     [self.window setDelegate:self];
+#if !LADYBIRD_APPLE
+    NSLog(@"showWindow: window delegate set");
+    fflush(stderr);
+#endif
 
+#if !LADYBIRD_APPLE
+    // GNUstep: Set toolbar delegate now that [self tab] is available
+    NSLog(@"showWindow: setting toolbar delegate");
+    fflush(stderr);
+    [self.toolbar setDelegate:self];
+    NSLog(@"showWindow: toolbar delegate set");
+    fflush(stderr);
+#endif
     [self.window setToolbar:self.toolbar];
+#if !LADYBIRD_APPLE
+    NSLog(@"showWindow: toolbar attached to window");
+    fflush(stderr);
+#endif
 #if LADYBIRD_APPLE
     [self.window setToolbarStyle:NSWindowToolbarStyleUnified];
 #endif

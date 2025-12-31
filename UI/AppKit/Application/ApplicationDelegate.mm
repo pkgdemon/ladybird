@@ -68,10 +68,22 @@
 - (nonnull TabController*)createNewTab:(Web::HTML::ActivateTab)activate_tab
                                fromTab:(nullable Tab*)tab
 {
+#if !LADYBIRD_APPLE
+    NSLog(@"createNewTab:activateTab:fromTab: allocating TabController");
+    fflush(stderr);
+#endif
     auto* controller = [[TabController alloc] init];
+#if !LADYBIRD_APPLE
+    NSLog(@"createNewTab:activateTab:fromTab: TabController allocated, calling initializeTabController");
+    fflush(stderr);
+#endif
     [self initializeTabController:controller
                       activateTab:activate_tab
                           fromTab:tab];
+#if !LADYBIRD_APPLE
+    NSLog(@"createNewTab:activateTab:fromTab: initializeTabController done");
+    fflush(stderr);
+#endif
 
     return controller;
 }
@@ -80,10 +92,26 @@
                        fromTab:(Tab*)tab
                    activateTab:(Web::HTML::ActivateTab)activate_tab
 {
+#if !LADYBIRD_APPLE
+    NSLog(@"createNewTab:fromTab:activateTab: starting");
+    fflush(stderr);
+#endif
     auto* controller = [self createNewTab:activate_tab fromTab:tab];
+#if !LADYBIRD_APPLE
+    NSLog(@"createNewTab:fromTab:activateTab: controller created");
+    fflush(stderr);
+#endif
 
     if (url.has_value()) {
+#if !LADYBIRD_APPLE
+        NSLog(@"createNewTab:fromTab:activateTab: about to loadURL");
+        fflush(stderr);
+#endif
         [controller loadURL:*url];
+#if !LADYBIRD_APPLE
+        NSLog(@"createNewTab:fromTab:activateTab: loadURL done");
+        fflush(stderr);
+#endif
     }
 
     return controller;
@@ -176,7 +204,15 @@
                     activateTab:(Web::HTML::ActivateTab)activate_tab
                         fromTab:(nullable Tab*)tab
 {
+#if !LADYBIRD_APPLE
+    NSLog(@"initializeTabController: calling showWindow");
+    fflush(stderr);
+#endif
     [controller showWindow:nil];
+#if !LADYBIRD_APPLE
+    NSLog(@"initializeTabController: showWindow done");
+    fflush(stderr);
+#endif
 
     if (tab) {
 #if LADYBIRD_HAS_TABGROUP
@@ -189,10 +225,18 @@
         }
     }
 
+#if !LADYBIRD_APPLE
+    NSLog(@"initializeTabController: handling activate_tab");
+    fflush(stderr);
+#endif
     if (activate_tab == Web::HTML::ActivateTab::Yes) {
         [[controller window] orderFrontRegardless];
         [controller focusLocationToolbarItem];
     }
+#if !LADYBIRD_APPLE
+    NSLog(@"initializeTabController: done");
+    fflush(stderr);
+#endif
 
     [self.managed_tabs addObject:controller];
 }
@@ -405,22 +449,52 @@
 - (void)applicationDidFinishLaunching:(NSNotification*)notification
 {
 #if !LADYBIRD_APPLE
+    NSLog(@"applicationDidFinishLaunching: start");
     // GNUstep requires explicit app activation
     [NSApp activateIgnoringOtherApps:YES];
+    NSLog(@"applicationDidFinishLaunching: app activated");
 #endif
 
     auto const& browser_options = WebView::Application::browser_options();
+#if !LADYBIRD_APPLE
+    NSLog(@"applicationDidFinishLaunching: got browser_options");
+#endif
 
     if (browser_options.devtools_port.has_value())
         [self onDevtoolsEnabled];
 
+#if !LADYBIRD_APPLE
+    NSLog(@"applicationDidFinishLaunching: about to create tab");
+    fflush(stderr);
+#endif
     Tab* tab = nil;
+#if !LADYBIRD_APPLE
+    NSLog(@"Tab pointer set to nil");
+    fflush(stderr);
+    NSLog(@"Checking urls.is_empty(), urls.size() = %zu", browser_options.urls.size());
+    fflush(stderr);
+#endif
 
     if (browser_options.urls.is_empty()) {
+#if !LADYBIRD_APPLE
+        NSLog(@"URLs is empty, creating blank tab");
+        fflush(stderr);
+#endif
         // No URLs provided, create a blank tab
         [self createNewTab:Web::HTML::ActivateTab::Yes fromTab:nil];
+#if !LADYBIRD_APPLE
+        NSLog(@"Tab created successfully");
+#endif
     } else {
+#if !LADYBIRD_APPLE
+        NSLog(@"URLs not empty, iterating through %zu URLs", browser_options.urls.size());
+        fflush(stderr);
+#endif
         for (auto const& url : browser_options.urls) {
+#if !LADYBIRD_APPLE
+            NSLog(@"Processing URL: %s", url.serialize().to_byte_string().characters());
+            fflush(stderr);
+#endif
             auto activate_tab = tab == nil ? Web::HTML::ActivateTab::Yes : Web::HTML::ActivateTab::No;
 
             auto* controller = [self createNewTab:url
