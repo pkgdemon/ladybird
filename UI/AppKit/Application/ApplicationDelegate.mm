@@ -260,9 +260,9 @@
 
 - (NSMenuItem*)createApplicationMenu
 {
-    auto* menu = [[NSMenuItem alloc] init];
-
     auto* process_name = [[NSProcessInfo processInfo] processName];
+    auto* menu = [[NSMenuItem alloc] initWithTitle:process_name action:nil keyEquivalent:@""];
+
     auto* submenu = [[NSMenu alloc] initWithTitle:process_name];
 
     [submenu addItem:Ladybird::create_application_menu_item(WebView::Application::the().open_about_page_action())];
@@ -286,7 +286,7 @@
 
 - (NSMenuItem*)createFileMenu
 {
-    auto* menu = [[NSMenuItem alloc] init];
+    auto* menu = [[NSMenuItem alloc] initWithTitle:@"File" action:nil keyEquivalent:@""];
     auto* submenu = [[NSMenu alloc] initWithTitle:@"File"];
 
     [submenu addItem:[[NSMenuItem alloc] initWithTitle:@"New Tab"
@@ -307,7 +307,7 @@
 
 - (NSMenuItem*)createEditMenu
 {
-    auto* menu = [[NSMenuItem alloc] init];
+    auto* menu = [[NSMenuItem alloc] initWithTitle:@"Edit" action:nil keyEquivalent:@""];
     auto* submenu = [[NSMenu alloc] initWithTitle:@"Edit"];
 
     [submenu addItem:[[NSMenuItem alloc] initWithTitle:@"Undo"
@@ -348,7 +348,7 @@
 
 - (NSMenuItem*)createViewMenu
 {
-    auto* menu = [[NSMenuItem alloc] init];
+    auto* menu = [[NSMenuItem alloc] initWithTitle:@"View" action:nil keyEquivalent:@""];
     auto* submenu = [[NSMenu alloc] initWithTitle:@"View"];
 
     auto* zoom_menu = Ladybird::create_application_menu(WebView::Application::the().zoom_menu());
@@ -388,7 +388,7 @@
 
 - (NSMenuItem*)createHistoryMenu
 {
-    auto* menu = [[NSMenuItem alloc] init];
+    auto* menu = [[NSMenuItem alloc] initWithTitle:@"History" action:nil keyEquivalent:@""];
 
     auto* submenu = [[NSMenu alloc] initWithTitle:@"History"];
     [submenu setAutoenablesItems:NO];
@@ -406,9 +406,8 @@
 
 - (NSMenuItem*)createInspectMenu
 {
-    auto* menu = [[NSMenuItem alloc] init];
-
     auto* submenu = Ladybird::create_application_menu(WebView::Application::the().inspect_menu());
+    auto* menu = [[NSMenuItem alloc] initWithTitle:[submenu title] action:nil keyEquivalent:@""];
     [menu setSubmenu:submenu];
 
     return menu;
@@ -416,9 +415,8 @@
 
 - (NSMenuItem*)createDebugMenu
 {
-    auto* menu = [[NSMenuItem alloc] init];
-
     auto* submenu = Ladybird::create_application_menu(WebView::Application::the().debug_menu());
+    auto* menu = [[NSMenuItem alloc] initWithTitle:[submenu title] action:nil keyEquivalent:@""];
     [menu setSubmenu:submenu];
 
     return menu;
@@ -426,7 +424,7 @@
 
 - (NSMenuItem*)createWindowMenu
 {
-    auto* menu = [[NSMenuItem alloc] init];
+    auto* menu = [[NSMenuItem alloc] initWithTitle:@"Window" action:nil keyEquivalent:@""];
     auto* submenu = [[NSMenu alloc] initWithTitle:@"Window"];
 
     [NSApp setWindowsMenu:submenu];
@@ -437,7 +435,7 @@
 
 - (NSMenuItem*)createHelpMenu
 {
-    auto* menu = [[NSMenuItem alloc] init];
+    auto* menu = [[NSMenuItem alloc] initWithTitle:@"Help" action:nil keyEquivalent:@""];
     auto* submenu = [[NSMenu alloc] initWithTitle:@"Help"];
 
 #if LADYBIRD_APPLE
