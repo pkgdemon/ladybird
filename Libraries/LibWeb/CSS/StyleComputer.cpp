@@ -133,6 +133,8 @@ void StyleComputer::visit_edges(Visitor& visitor)
 {
     Base::visit_edges(visitor);
     visitor.visit(m_document);
+    if (m_has_result_cache)
+        visitor.visit(*m_has_result_cache);
 }
 
 Optional<String> StyleComputer::user_agent_style_sheet_source(StringView name)
@@ -350,6 +352,7 @@ Vector<MatchingRule const*> StyleComputer::collect_matching_rules(DOM::AbstractE
             .style_sheet_for_rule = *rule_to_run.sheet,
             .subject = abstract_element.element(),
             .collect_per_element_selector_involvement_metadata = true,
+            .has_result_cache = m_has_result_cache.ptr(),
         };
         ScopeGuard guard = [&] {
             attempted_pseudo_class_matches |= context.attempted_pseudo_class_matches;
@@ -1031,54 +1034,7 @@ static void compute_transitioned_properties(ComputedProperties const& style, DOM
         return;
     }
 
-    auto coordinated_transition_list = style.assemble_coordinated_value_list(
-        PropertyID::TransitionProperty,
-        { PropertyID::TransitionProperty, PropertyID::TransitionDuration, PropertyID::TransitionTimingFunction, PropertyID::TransitionDelay, PropertyID::TransitionBehavior });
-
-    auto transition_properties = coordinated_transition_list.get(PropertyID::TransitionProperty).value();
-    Vector<Vector<PropertyID>> properties;
-
-    for (size_t i = 0; i < transition_properties.size(); i++) {
-        auto property_value = transition_properties[i];
-        Vector<PropertyID> properties_for_this_transition;
-
-        auto const append_property_mapping_logical_aliases = [&](PropertyID property_id) {
-            if (property_is_logical_alias(property_id))
-                properties_for_this_transition.append(map_logical_alias_to_physical_property(property_id, LogicalAliasMappingContext { style.writing_mode(), style.direction() }));
-            else if (property_id != PropertyID::Custom)
-                properties_for_this_transition.append(property_id);
-        };
-
-        if (property_value->is_keyword()) {
-            VERIFY(property_value->to_keyword() == Keyword::None);
-            properties.append({});
-            continue;
-        } else {
-            auto maybe_property = property_id_from_string(property_value->as_custom_ident().custom_ident());
-            if (!maybe_property.has_value()) {
-                properties.append({});
-                continue;
-            }
-
-            auto transition_property = maybe_property.release_value();
-            if (property_is_shorthand(transition_property)) {
-                for (auto const& prop : expanded_longhands_for_shorthand(transition_property))
-                    append_property_mapping_logical_aliases(prop);
-            } else {
-                append_property_mapping_logical_aliases(transition_property);
-            }
-        }
-
-        properties.append(move(properties_for_this_transition));
-    }
-
-    element.add_transitioned_properties(
-        pseudo_element,
-        move(properties),
-        move(coordinated_transition_list.get(PropertyID::TransitionDelay).value()),
-        move(coordinated_transition_list.get(PropertyID::TransitionDuration).value()),
-        move(coordinated_transition_list.get(PropertyID::TransitionTimingFunction).value()),
-        move(coordinated_transition_list.get(PropertyID::TransitionBehavior).value()));
+    element.add_transitioned_properties(pseudo_element, style.transitions());
 }
 
 // https://drafts.csswg.org/css-transitions/#starting
@@ -2887,6 +2843,14 @@ static void for_each_element_hash(DOM::Element const& element, auto callback)
 void StyleComputer::reset_ancestor_filter()
 {
     m_ancestor_filter->clear();
+}
+
+void StyleComputer::reset_has_result_cache()
+{
+    if (!m_has_result_cache)
+        m_has_result_cache = make<SelectorEngine::HasResultCache>();
+    else
+        m_has_result_cache->clear();
 }
 
 void StyleComputer::push_ancestor(DOM::Element const& element)

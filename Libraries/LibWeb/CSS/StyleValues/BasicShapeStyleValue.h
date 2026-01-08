@@ -25,6 +25,8 @@ struct Inset {
     ValueComparingNonnullRefPtr<StyleValue const> right;
     ValueComparingNonnullRefPtr<StyleValue const> bottom;
     ValueComparingNonnullRefPtr<StyleValue const> left;
+
+    ValueComparingNonnullRefPtr<StyleValue const> border_radius;
 };
 
 struct Xywh {
@@ -36,6 +38,8 @@ struct Xywh {
     ValueComparingNonnullRefPtr<StyleValue const> y;
     ValueComparingNonnullRefPtr<StyleValue const> width;
     ValueComparingNonnullRefPtr<StyleValue const> height;
+
+    ValueComparingNonnullRefPtr<StyleValue const> border_radius;
 };
 
 struct Rect {
@@ -47,6 +51,8 @@ struct Rect {
     ValueComparingNonnullRefPtr<StyleValue const> right;
     ValueComparingNonnullRefPtr<StyleValue const> bottom;
     ValueComparingNonnullRefPtr<StyleValue const> left;
+
+    ValueComparingNonnullRefPtr<StyleValue const> border_radius;
 };
 
 struct Circle {

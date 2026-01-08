@@ -199,6 +199,8 @@ class GeneratedContentImageProvider final
     GC_DECLARE_ALLOCATOR(GeneratedContentImageProvider);
 
 public:
+    static constexpr bool OVERRIDES_FINALIZE = true;
+
     virtual ~GeneratedContentImageProvider() override = default;
 
     virtual void finalize() override
@@ -250,6 +252,7 @@ private:
     {
         Base::visit_edges(visitor);
         visitor.visit(m_layout_node);
+        m_image->visit_edges(visitor);
     }
 
     virtual void image_provider_visit_edges(Visitor& visitor) const override

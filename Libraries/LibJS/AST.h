@@ -709,6 +709,11 @@ public:
     [[nodiscard]] DeclarationKind declaration_kind() const { return m_declaration_kind; }
     void set_declaration_kind(DeclarationKind kind) { m_declaration_kind = kind; }
 
+    // Returns true if this identifier reference was inside a function scope containing
+    // a direct call to eval(). Such identifiers cannot be optimized as globals.
+    bool is_inside_scope_with_eval() const { return m_is_inside_scope_with_eval; }
+    void set_is_inside_scope_with_eval() { m_is_inside_scope_with_eval = true; }
+
     virtual void dump(int indent) const override;
     virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
@@ -721,6 +726,7 @@ private:
     Local::Type m_local_type { Local::Type::None };
 
     bool m_is_global { false };
+    bool m_is_inside_scope_with_eval { false };
     DeclarationKind m_declaration_kind { DeclarationKind::None };
 };
 
@@ -1935,7 +1941,7 @@ public:
     {
     }
 
-    TemplateLiteral(SourceRange source_range, Vector<NonnullRefPtr<Expression const>> expressions, Vector<NonnullRefPtr<Expression const>> raw_strings)
+    TemplateLiteral(SourceRange source_range, Vector<NonnullRefPtr<Expression const>> expressions, Vector<NonnullRefPtr<StringLiteral const>> raw_strings)
         : Expression(move(source_range))
         , m_expressions(move(expressions))
         , m_raw_strings(move(raw_strings))
@@ -1946,11 +1952,11 @@ public:
     virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
     Vector<NonnullRefPtr<Expression const>> const& expressions() const { return m_expressions; }
-    Vector<NonnullRefPtr<Expression const>> const& raw_strings() const { return m_raw_strings; }
+    Vector<NonnullRefPtr<StringLiteral const>> const& raw_strings() const { return m_raw_strings; }
 
 private:
     Vector<NonnullRefPtr<Expression const>> const m_expressions;
-    Vector<NonnullRefPtr<Expression const>> const m_raw_strings;
+    Vector<NonnullRefPtr<StringLiteral const>> const m_raw_strings;
 };
 
 class TaggedTemplateLiteral final : public Expression {

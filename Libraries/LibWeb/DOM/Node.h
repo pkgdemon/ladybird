@@ -148,6 +148,8 @@ class WEB_API Node : public EventTarget
     WEB_PLATFORM_OBJECT(Node, EventTarget);
 
 public:
+    static constexpr bool OVERRIDES_FINALIZE = true;
+
     ParentNode* parent_or_shadow_host();
     ParentNode const* parent_or_shadow_host() const { return const_cast<Node*>(this)->parent_or_shadow_host(); }
 
@@ -472,6 +474,7 @@ public:
     Optional<String> lookup_namespace_uri(Optional<String> prefix) const;
     Optional<String> lookup_prefix(Optional<String> namespace_) const;
     bool is_default_namespace(Optional<String> namespace_) const;
+    Vector<FlyString> get_in_scope_prefixes() const;
 
     bool is_inert() const;
 

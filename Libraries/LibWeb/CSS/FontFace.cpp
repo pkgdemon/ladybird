@@ -16,6 +16,7 @@
 #include <LibJS/Runtime/Realm.h>
 #include <LibWeb/Bindings/FontFacePrototype.h>
 #include <LibWeb/Bindings/Intrinsics.h>
+#include <LibWeb/CSS/CSSFontFaceRule.h>
 #include <LibWeb/CSS/FontComputer.h>
 #include <LibWeb/CSS/FontFace.h>
 #include <LibWeb/CSS/Parser/Parser.h>
@@ -181,6 +182,35 @@ GC::Ref<FontFace> FontFace::construct_impl(JS::Realm& realm, String family, Font
     return font_face;
 }
 
+// https://drafts.csswg.org/css-font-loading/#font-face-css-connection
+GC::Ref<FontFace> FontFace::create_css_connected(JS::Realm& realm, CSSFontFaceRule& rule)
+{
+    HTML::TemporaryExecutionContext execution_context { realm };
+
+    auto font_face = realm.create<FontFace>(realm, WebIDL::create_promise(realm));
+    auto const& descriptors = *rule.descriptors();
+
+    font_face->m_family = descriptors.font_family();
+    font_face->m_style = descriptors.font_style();
+    font_face->m_weight = descriptors.font_weight();
+    font_face->m_stretch = descriptors.font_width();
+    font_face->m_unicode_range = descriptors.unicode_range();
+    font_face->m_feature_settings = descriptors.font_feature_settings();
+    font_face->m_variation_settings = descriptors.font_variation_settings();
+    font_face->m_display = descriptors.font_display();
+    font_face->m_ascent_override = descriptors.ascent_override();
+    font_face->m_descent_override = descriptors.descent_override();
+    font_face->m_line_gap_override = descriptors.line_gap_override();
+
+    if (auto src_value = descriptors.descriptor(DescriptorID::Src))
+        font_face->m_urls = ParsedFontFace::sources_from_style_value(*src_value);
+
+    font_face->m_css_font_face_rule = &rule;
+    rule.set_css_connected_font_face(font_face);
+
+    return font_face;
+}
+
 FontFace::FontFace(JS::Realm& realm, GC::Ref<WebIDL::Promise> font_status_promise)
     : Bindings::PlatformObject(realm)
     , m_font_status_promise(font_status_promise)
@@ -200,6 +230,84 @@ void FontFace::visit_edges(JS::Cell::Visitor& visitor)
     Base::visit_edges(visitor);
 
     visitor.visit(m_font_status_promise);
+    visitor.visit(m_css_font_face_rule);
+}
+
+String FontFace::family() const
+{
+    if (m_css_font_face_rule)
+        return m_css_font_face_rule->descriptors()->font_family();
+    return m_family;
+}
+
+String FontFace::style() const
+{
+    if (m_css_font_face_rule)
+        return m_css_font_face_rule->descriptors()->font_style();
+    return m_style;
+}
+
+String FontFace::weight() const
+{
+    if (m_css_font_face_rule)
+        return m_css_font_face_rule->descriptors()->font_weight();
+    return m_weight;
+}
+
+String FontFace::stretch() const
+{
+    if (m_css_font_face_rule)
+        return m_css_font_face_rule->descriptors()->font_width();
+    return m_stretch;
+}
+
+String FontFace::unicode_range() const
+{
+    if (m_css_font_face_rule)
+        return m_css_font_face_rule->descriptors()->unicode_range();
+    return m_unicode_range;
+}
+
+String FontFace::feature_settings() const
+{
+    if (m_css_font_face_rule)
+        return m_css_font_face_rule->descriptors()->font_feature_settings();
+    return m_feature_settings;
+}
+
+String FontFace::variation_settings() const
+{
+    if (m_css_font_face_rule)
+        return m_css_font_face_rule->descriptors()->font_variation_settings();
+    return m_variation_settings;
+}
+
+String FontFace::display() const
+{
+    if (m_css_font_face_rule)
+        return m_css_font_face_rule->descriptors()->font_display();
+    return m_display;
+}
+
+String FontFace::ascent_override() const
+{
+    if (m_css_font_face_rule)
+        return m_css_font_face_rule->descriptors()->ascent_override();
+    return m_ascent_override;
+}
+
+String FontFace::descent_override() const
+{
+    if (m_css_font_face_rule)
+        return m_css_font_face_rule->descriptors()->descent_override();
+    return m_descent_override;
+}
+
+String FontFace::line_gap_override() const
+{
+    if (m_css_font_face_rule)
+        return m_css_font_face_rule->descriptors()->line_gap_override();
+    return m_line_gap_override;
 }
 
 GC::Ref<WebIDL::Promise> FontFace::loaded() const
@@ -211,8 +319,14 @@ void FontFace::reject_status_promise(JS::Value reason)
 {
     if (m_status != Bindings::FontFaceLoadStatus::Error) {
         WebIDL::reject_promise(realm(), m_font_status_promise, reason);
+        WebIDL::mark_promise_as_handled(m_font_status_promise);
         m_status = Bindings::FontFaceLoadStatus::Error;
     }
+}
+
+void FontFace::disconnect_from_css_rule()
+{
+    m_css_font_face_rule = nullptr;
 }
 
 // https://drafts.csswg.org/css-font-loading/#dom-fontface-family
@@ -226,9 +340,8 @@ WebIDL::ExceptionOr<void> FontFace::set_family(String const& string)
     if (!property)
         return WebIDL::SyntaxError::create(realm(), "FontFace.family setter: Invalid descriptor value"_utf16);
 
-    if (m_is_css_connected) {
-        // FIXME: Propagate to the CSSFontFaceRule and update the font-family property
-    }
+    if (m_css_font_face_rule)
+        TRY(m_css_font_face_rule->descriptors()->set_font_family(string));
 
     m_family = property->as_custom_ident().custom_ident().to_string();
 
@@ -246,9 +359,8 @@ WebIDL::ExceptionOr<void> FontFace::set_style(String const& string)
     if (!property)
         return WebIDL::SyntaxError::create(realm(), "FontFace.style setter: Invalid descriptor value"_utf16);
 
-    if (m_is_css_connected) {
-        // FIXME: Propagate to the CSSFontFaceRule and update the font-style property
-    }
+    if (m_css_font_face_rule)
+        TRY(m_css_font_face_rule->descriptors()->set_font_style(string));
 
     m_style = property->to_string(SerializationMode::Normal);
 
@@ -266,9 +378,8 @@ WebIDL::ExceptionOr<void> FontFace::set_weight(String const& string)
     if (!property)
         return WebIDL::SyntaxError::create(realm(), "FontFace.weight setter: Invalid descriptor value"_utf16);
 
-    if (m_is_css_connected) {
-        // FIXME: Propagate to the CSSFontFaceRule and update the font-weight property
-    }
+    if (m_css_font_face_rule)
+        TRY(m_css_font_face_rule->descriptors()->set_font_weight(string));
 
     m_weight = property->to_string(SerializationMode::Normal);
 
@@ -287,9 +398,8 @@ WebIDL::ExceptionOr<void> FontFace::set_stretch(String const& string)
     if (!property)
         return WebIDL::SyntaxError::create(realm(), "FontFace.stretch setter: Invalid descriptor value"_utf16);
 
-    if (m_is_css_connected) {
-        // FIXME: Propagate to the CSSFontFaceRule and update the font-width property
-    }
+    if (m_css_font_face_rule)
+        TRY(m_css_font_face_rule->descriptors()->set_font_width(string));
 
     m_stretch = property->to_string(SerializationMode::Normal);
 
@@ -307,9 +417,8 @@ WebIDL::ExceptionOr<void> FontFace::set_unicode_range(String const& string)
     if (!property)
         return WebIDL::SyntaxError::create(realm(), "FontFace.unicodeRange setter: Invalid descriptor value"_utf16);
 
-    if (m_is_css_connected) {
-        // FIXME: Propagate to the CSSFontFaceRule and update the font-width property
-    }
+    if (m_css_font_face_rule)
+        TRY(m_css_font_face_rule->descriptors()->set_unicode_range(string));
 
     m_unicode_range = property->to_string(SerializationMode::Normal);
 
@@ -327,9 +436,8 @@ WebIDL::ExceptionOr<void> FontFace::set_feature_settings(String const& string)
     if (!property)
         return WebIDL::SyntaxError::create(realm(), "FontFace.featureSettings setter: Invalid descriptor value"_utf16);
 
-    if (m_is_css_connected) {
-        // FIXME: Propagate to the CSSFontFaceRule and update the font-width property
-    }
+    if (m_css_font_face_rule)
+        TRY(m_css_font_face_rule->descriptors()->set_font_feature_settings(string));
 
     m_feature_settings = property->to_string(SerializationMode::Normal);
 
@@ -347,9 +455,8 @@ WebIDL::ExceptionOr<void> FontFace::set_variation_settings(String const& string)
     if (!property)
         return WebIDL::SyntaxError::create(realm(), "FontFace.variationSettings setter: Invalid descriptor value"_utf16);
 
-    if (m_is_css_connected) {
-        // FIXME: Propagate to the CSSFontFaceRule and update the font-width property
-    }
+    if (m_css_font_face_rule)
+        TRY(m_css_font_face_rule->descriptors()->set_font_variation_settings(string));
 
     m_variation_settings = property->to_string(SerializationMode::Normal);
 
@@ -367,9 +474,8 @@ WebIDL::ExceptionOr<void> FontFace::set_display(String const& string)
     if (!property)
         return WebIDL::SyntaxError::create(realm(), "FontFace.display setter: Invalid descriptor value"_utf16);
 
-    if (m_is_css_connected) {
-        // FIXME: Propagate to the CSSFontFaceRule and update the font-width property
-    }
+    if (m_css_font_face_rule)
+        TRY(m_css_font_face_rule->descriptors()->set_font_display(string));
 
     m_display = property->to_string(SerializationMode::Normal);
 
@@ -387,9 +493,8 @@ WebIDL::ExceptionOr<void> FontFace::set_ascent_override(String const& string)
     if (!property)
         return WebIDL::SyntaxError::create(realm(), "FontFace.ascentOverride setter: Invalid descriptor value"_utf16);
 
-    if (m_is_css_connected) {
-        // FIXME: Propagate to the CSSFontFaceRule and update the font-width property
-    }
+    if (m_css_font_face_rule)
+        TRY(m_css_font_face_rule->descriptors()->set_ascent_override(string));
 
     m_ascent_override = property->to_string(SerializationMode::Normal);
 
@@ -407,9 +512,8 @@ WebIDL::ExceptionOr<void> FontFace::set_descent_override(String const& string)
     if (!property)
         return WebIDL::SyntaxError::create(realm(), "FontFace.descentOverride setter: Invalid descriptor value"_utf16);
 
-    if (m_is_css_connected) {
-        // FIXME: Propagate to the CSSFontFaceRule and update the font-width property
-    }
+    if (m_css_font_face_rule)
+        TRY(m_css_font_face_rule->descriptors()->set_descent_override(string));
 
     m_descent_override = property->to_string(SerializationMode::Normal);
 
@@ -427,9 +531,8 @@ WebIDL::ExceptionOr<void> FontFace::set_line_gap_override(String const& string)
     if (!property)
         return WebIDL::SyntaxError::create(realm(), "FontFace.lineGapOverride setter: Invalid descriptor value"_utf16);
 
-    if (m_is_css_connected) {
-        // FIXME: Propagate to the CSSFontFaceRule and update the font-width property
-    }
+    if (m_css_font_face_rule)
+        TRY(m_css_font_face_rule->descriptors()->set_line_gap_override(string));
 
     m_line_gap_override = property->to_string(SerializationMode::Normal);
 

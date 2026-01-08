@@ -180,17 +180,8 @@ void paint_background(DisplayListRecordingContext& context, PaintableBox const& 
         if (background_positioning_area.is_empty())
             continue;
 
-        if (layer.position_edge_x == CSS::PositionEdge::Right) {
-            image_rect.set_right_without_resize(background_positioning_area.right() - layer.offset_x);
-        } else {
-            image_rect.set_left(background_positioning_area.left() + layer.offset_x);
-        }
-
-        if (layer.position_edge_y == CSS::PositionEdge::Bottom) {
-            image_rect.set_bottom_without_resize(background_positioning_area.bottom() - layer.offset_y);
-        } else {
-            image_rect.set_top(background_positioning_area.top() + layer.offset_y);
-        }
+        image_rect.set_left(background_positioning_area.left() + layer.position_x);
+        image_rect.set_top(background_positioning_area.top() + layer.position_y);
 
         // Repetition
         bool repeat_x = false;
@@ -343,24 +334,18 @@ void paint_background(DisplayListRecordingContext& context, PaintableBox const& 
     }
 }
 
-ResolvedBackground resolve_background_layers(Vector<CSS::BackgroundLayerData> const& layers, PaintableBox const& paintable_box, Color background_color, CSSPixelRect const& border_rect, BorderRadiiData const& border_radii)
+ResolvedBackground resolve_background_layers(Vector<CSS::BackgroundLayerData> const& layers, PaintableBox const& paintable_box, Color background_color, CSS::BackgroundBox background_color_clip, CSSPixelRect const& border_rect, BorderRadiiData const& border_radii)
 {
-    auto layer_is_paintable = [&](auto& layer) {
-        return layer.background_image && layer.background_image->is_paintable();
-    };
-
     BackgroundBox border_box {
         border_rect,
         border_radii
     };
 
-    auto color_box = border_box;
-    if (!layers.is_empty())
-        color_box = get_box(layers.last().clip, border_box, paintable_box);
+    auto color_box = get_box(background_color_clip, border_box, paintable_box);
 
     Vector<ResolvedBackgroundLayerData> resolved_layers;
     for (auto const& layer : layers) {
-        if (!layer_is_paintable(layer))
+        if (!layer.background_image->is_paintable())
             continue;
 
         auto background_positioning_area = get_box(layer.origin, border_box, paintable_box).rect;
@@ -449,16 +434,14 @@ ResolvedBackground resolve_background_layers(Vector<CSS::BackgroundLayerData> co
         CSSPixels space_x = background_positioning_area.width() - image_rect.width();
         CSSPixels space_y = background_positioning_area.height() - image_rect.height();
 
-        CSSPixels offset_x = layer.position_offset_x.to_px(paintable_box.layout_node(), space_x);
-        CSSPixels offset_y = layer.position_offset_y.to_px(paintable_box.layout_node(), space_y);
+        CSSPixels position_x = layer.position_x.to_px(paintable_box.layout_node(), space_x);
+        CSSPixels position_y = layer.position_y.to_px(paintable_box.layout_node(), space_y);
 
         resolved_layers.append({ .background_image = layer.background_image,
             .attachment = layer.attachment,
             .clip = layer.clip,
-            .position_edge_x = layer.position_edge_x,
-            .position_edge_y = layer.position_edge_y,
-            .offset_x = offset_x,
-            .offset_y = offset_y,
+            .position_x = position_x,
+            .position_y = position_y,
             .background_positioning_area = background_positioning_area,
             .image_rect = image_rect,
             .repeat_x = layer.repeat_x,
@@ -469,7 +452,7 @@ ResolvedBackground resolve_background_layers(Vector<CSS::BackgroundLayerData> co
     return ResolvedBackground {
         .color_box = color_box,
         .layers = move(resolved_layers),
-        .needs_text_clip = !layers.is_empty() && layers.last().clip == CSS::BackgroundBox::Text,
+        .needs_text_clip = background_color_clip == CSS::BackgroundBox::Text,
         .background_rect = border_rect,
         .color = background_color
     };

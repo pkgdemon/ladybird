@@ -11,22 +11,31 @@
 
 namespace Web::CSS {
 
-bool PositionStyleValue::is_center() const
+bool PositionStyleValue::is_center(SerializationMode mode) const
 {
-    return (edge_x()->offset().is_percentage() && edge_x()->offset().percentage() == Percentage { 50 })
-        && (edge_y()->offset().is_percentage() && edge_y()->offset().percentage() == Percentage { 50 });
+    return edge_x()->is_center(mode) && edge_y()->is_center(mode);
 }
 
 CSSPixelPoint PositionStyleValue::resolved(Layout::Node const& node, CSSPixelRect const& rect) const
 {
     // Note: A preset + a none default x/y_relative_to is impossible in the syntax (and makes little sense)
-    CSSPixels x = m_properties.edge_x->offset().to_px(node, rect.width());
-    CSSPixels y = m_properties.edge_y->offset().to_px(node, rect.height());
-    if (m_properties.edge_x->edge() == PositionEdge::Right)
-        x = rect.width() - x;
-    if (m_properties.edge_y->edge() == PositionEdge::Bottom)
-        y = rect.height() - y;
+    CSSPixels x = LengthPercentage::from_style_value(m_properties.edge_x->offset()).to_px(node, rect.width());
+    CSSPixels y = LengthPercentage::from_style_value(m_properties.edge_y->offset()).to_px(node, rect.height());
     return CSSPixelPoint { rect.x() + x, rect.y() + y };
+}
+
+ValueComparingNonnullRefPtr<PositionStyleValue const> PositionStyleValue::with_resolved_keywords() const
+{
+    return PositionStyleValue::create(
+        edge_x()->with_resolved_keywords(),
+        edge_y()->with_resolved_keywords());
+}
+
+ValueComparingNonnullRefPtr<StyleValue const> PositionStyleValue::absolutized(ComputationContext const& computation_context) const
+{
+    return PositionStyleValue::create(
+        edge_x()->absolutized(computation_context)->as_edge(),
+        edge_y()->absolutized(computation_context)->as_edge());
 }
 
 String PositionStyleValue::to_string(SerializationMode mode) const

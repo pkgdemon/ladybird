@@ -217,6 +217,7 @@ class AngleStyleValue;
 class BackgroundSizeStyleValue;
 class BasicShapeStyleValue;
 class BorderImageSliceStyleValue;
+class BorderRadiusRectStyleValue;
 class BorderRadiusStyleValue;
 class CalculatedStyleValue;
 class CalculationNode;
@@ -415,10 +416,14 @@ struct GridRepeatParams;
 struct LogicalAliasMappingContext;
 struct RandomCachingKey;
 struct StyleSheetIdentifier;
+struct TransitionProperties;
+template<typename T>
+struct ValueComparingNonnullRefPtr;
 
 // https://drafts.css-houdini.org/css-typed-om-1/#typedefdef-cssnumberish
 using CSSNumberish = Variant<double, GC::Root<CSSNumericValue>>;
 using PaintOrderList = Array<PaintOrder, 3>;
+using StyleValueVector = Vector<ValueComparingNonnullRefPtr<StyleValue const>>;
 
 }
 

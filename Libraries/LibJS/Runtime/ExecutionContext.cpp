@@ -9,6 +9,7 @@
 
 #include <LibGC/Heap.h>
 #include <LibJS/Bytecode/Executable.h>
+#include <LibJS/Runtime/DeclarativeEnvironment.h>
 #include <LibJS/Runtime/ExecutionContext.h>
 #include <LibJS/Runtime/FunctionObject.h>
 
@@ -136,10 +137,12 @@ void ExecutionContext::visit_edges(Cell::Visitor& visitor)
     visitor.visit(lexical_environment);
     visitor.visit(private_environment);
     visitor.visit(m_rare_data);
-    if (this_value.has_value())
-        visitor.visit(*this_value);
+    visitor.visit(this_value);
     visitor.visit(executable);
     visitor.visit(registers_and_constants_and_locals_and_arguments_span());
+    visitor.visit(global_object);
+    visitor.visit(global_declarative_environment);
+    visitor.visit(arguments);
     script_or_module.visit(
         [](Empty) {},
         [&](auto& script_or_module) {

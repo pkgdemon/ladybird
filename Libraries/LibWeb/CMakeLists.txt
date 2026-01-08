@@ -166,6 +166,7 @@ set(SOURCES
     CSS/FontComputer.cpp
     CSS/FontFace.cpp
     CSS/FontFaceSet.cpp
+    CSS/FontFaceSetLoadEvent.cpp
     CSS/Frequency.cpp
     CSS/GridTrackPlacement.cpp
     CSS/GridTrackSize.cpp
@@ -229,6 +230,7 @@ set(SOURCES
     CSS/StyleValues/BasicShapeStyleValue.cpp
     CSS/StyleValues/BorderImageSliceStyleValue.cpp
     CSS/StyleValues/BorderRadiusStyleValue.cpp
+    CSS/StyleValues/BorderRadiusRectStyleValue.cpp
     CSS/StyleValues/CalculatedStyleValue.cpp
     CSS/StyleValues/ColorFunctionStyleValue.cpp
     CSS/StyleValues/ColorMixStyleValue.cpp

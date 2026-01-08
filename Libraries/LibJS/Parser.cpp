@@ -353,10 +353,14 @@ public:
             }
 
             if (m_type == ScopeType::Program) {
-                auto can_use_global_for_identifier = !(identifier_group.used_inside_with_statement || identifier_group.might_be_variable_in_lexical_scope_in_named_function_assignment || identifier_group.used_inside_scope_with_eval || m_parser.m_state.initiated_by_eval);
+                auto can_use_global_for_identifier = !(identifier_group.used_inside_with_statement || identifier_group.might_be_variable_in_lexical_scope_in_named_function_assignment || m_parser.m_state.initiated_by_eval);
                 if (can_use_global_for_identifier) {
-                    for (auto& identifier : identifier_group.identifiers)
-                        identifier->set_is_global();
+                    for (auto& identifier : identifier_group.identifiers) {
+                        // Only mark identifiers as global if they are not inside a function scope
+                        // that contains eval() or has eval in its scope chain.
+                        if (!identifier->is_inside_scope_with_eval())
+                            identifier->set_is_global();
+                    }
                 }
             } else if (local_variable_declaration_kind.has_value() || is_function_parameter) {
                 if (hoistable_function_declaration)
@@ -399,8 +403,12 @@ public:
                 if (m_type == ScopeType::With)
                     identifier_group.used_inside_with_statement = true;
 
-                if (m_contains_direct_call_to_eval)
-                    identifier_group.used_inside_scope_with_eval = true;
+                // Mark each identifier individually if it's inside a scope with eval.
+                // This allows per-identifier optimization decisions at Program scope.
+                if (m_contains_direct_call_to_eval || m_screwed_by_eval_in_scope_chain) {
+                    for (auto& identifier : identifier_group.identifiers)
+                        identifier->set_is_inside_scope_with_eval();
+                }
 
                 if (m_parent_scope) {
                     if (auto maybe_parent_scope_identifier_group = m_parent_scope->m_identifier_groups.get(identifier_group_name); maybe_parent_scope_identifier_group.has_value()) {
@@ -411,8 +419,6 @@ public:
                             maybe_parent_scope_identifier_group.value().used_inside_with_statement = true;
                         if (identifier_group.might_be_variable_in_lexical_scope_in_named_function_assignment)
                             maybe_parent_scope_identifier_group.value().might_be_variable_in_lexical_scope_in_named_function_assignment = true;
-                        if (identifier_group.used_inside_scope_with_eval)
-                            maybe_parent_scope_identifier_group.value().used_inside_scope_with_eval = true;
                     } else {
                         m_parent_scope->m_identifier_groups.set(identifier_group_name, identifier_group);
                     }
@@ -529,7 +535,6 @@ private:
     struct IdentifierGroup {
         bool captured_by_nested_function { false };
         bool used_inside_with_statement { false };
-        bool used_inside_scope_with_eval { false };
         bool might_be_variable_in_lexical_scope_in_named_function_assignment { false };
         Vector<NonnullRefPtr<Identifier>> identifiers;
         Optional<DeclarationKind> declaration_kind;
@@ -2249,7 +2254,7 @@ NonnullRefPtr<TemplateLiteral const> Parser::parse_template_literal(bool is_tagg
     consume(TokenType::TemplateLiteralStart);
 
     Vector<NonnullRefPtr<Expression const>> expressions;
-    Vector<NonnullRefPtr<Expression const>> raw_strings;
+    Vector<NonnullRefPtr<StringLiteral const>> raw_strings;
 
     auto append_empty_string = [this, &rule_start, &expressions, &raw_strings, is_tagged]() {
         auto string_literal = create_ast_node<StringLiteral>({ m_source_code, rule_start.position(), position() }, Utf16String {});

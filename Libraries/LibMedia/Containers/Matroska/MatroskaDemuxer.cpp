@@ -83,10 +83,12 @@ static Track track_from_track_entry(TrackEntry const& track_entry)
     return track;
 }
 
-void MatroskaDemuxer::create_context_for_track(Track const& track, NonnullRefPtr<IncrementallyPopulatedStream::Cursor> const& stream_cursor)
+DecoderErrorOr<void> MatroskaDemuxer::create_context_for_track(Track const& track, NonnullRefPtr<IncrementallyPopulatedStream::Cursor> const& stream_cursor)
 {
-    auto iterator = MUST(m_reader.create_sample_iterator(stream_cursor, track.identifier()));
+    auto iterator = TRY(m_reader.create_sample_iterator(stream_cursor, track.identifier()));
+    Threading::MutexLocker locker(m_track_statuses_mutex);
     VERIFY(m_track_statuses.set(track, TrackStatus(move(iterator))) == HashSetResult::InsertedNewEntry);
+    return {};
 }
 
 DecoderErrorOr<Vector<Track>> MatroskaDemuxer::get_tracks_for_type(TrackType type)
@@ -115,6 +117,7 @@ DecoderErrorOr<Optional<Track>> MatroskaDemuxer::get_preferred_track_for_type(Tr
 
 DecoderErrorOr<MatroskaDemuxer::TrackStatus*> MatroskaDemuxer::get_track_status(Track const& track)
 {
+    Threading::MutexLocker locker(m_track_statuses_mutex);
     return &m_track_statuses.get(track).release_value();
 }
 
@@ -146,6 +149,7 @@ DecoderErrorOr<DemuxerSeekResult> MatroskaDemuxer::seek_to_most_recent_keyframe(
 
     track_status.iterator = move(seeked_iterator);
     track_status.block = {};
+    track_status.frames = {};
     track_status.frame_index = 0;
     return DemuxerSeekResult::MovedPosition;
 }
@@ -156,8 +160,9 @@ DecoderErrorOr<CodedFrame> MatroskaDemuxer::get_next_sample_for_track(Track cons
     //        Matroska should make a RefPtr<ByteBuffer>, probably.
     auto& status = *TRY(get_track_status(track));
 
-    if (!status.block.has_value() || status.frame_index >= status.block->frame_count()) {
+    if (!status.block.has_value() || status.frame_index >= status.frames.size()) {
         status.block = TRY(status.iterator.next_block());
+        status.frames = TRY(status.iterator.get_frames(status.block.value()));
         status.frame_index = 0;
     }
 
@@ -175,13 +180,12 @@ DecoderErrorOr<CodedFrame> MatroskaDemuxer::get_next_sample_for_track(Track cons
         }
         VERIFY_NOT_REACHED();
     }();
-    auto sample_data = DECODER_TRY_ALLOC(ByteBuffer::copy(status.block->frame(status.frame_index++)));
-    return CodedFrame(timestamp, duration, flags, move(sample_data), aux_data);
+    return CodedFrame(timestamp, duration, flags, move(status.frames[status.frame_index++]), aux_data);
 }
 
 DecoderErrorOr<AK::Duration> MatroskaDemuxer::total_duration()
 {
-    auto duration = TRY(m_reader.segment_information()).duration();
+    auto duration = m_reader.duration();
     return duration.value_or(AK::Duration::zero());
 }
 

@@ -2279,6 +2279,71 @@ bool Node::is_equal_node(Node const* other_node) const
     return true;
 }
 
+Vector<FlyString> Node::get_in_scope_prefixes() const
+{
+    // https://html.spec.whatwg.org/multipage/xhtml.html#parsing-xhtml-fragments
+    // "A namespace prefix is in scope if the DOM lookupNamespaceURI() method on the element would return a non-null value for that prefix."
+
+    Vector<FlyString> prefixes;
+    HashTable<FlyString> seen_prefixes;
+
+    auto add_prefix = [&](FlyString const& prefix) {
+        if (!seen_prefixes.contains(prefix)) {
+            prefixes.append(prefix);
+            seen_prefixes.set(prefix);
+            VERIFY(lookup_namespace_uri(prefix.to_string()).has_value());
+        }
+    };
+
+    add_prefix("xml"_fly_string);
+    add_prefix("xmlns"_fly_string);
+
+    Element const* current = nullptr;
+
+    if (is<Element>(*this)) {
+        current = static_cast<Element const*>(this);
+    } else if (is<Document>(*this)) {
+        current = static_cast<Document const*>(this)->document_element();
+    } else if (is<Attr>(*this)) {
+        current = static_cast<Attr const*>(this)->owner_element();
+    } else {
+        current = parent_element();
+    }
+
+    while (current) {
+        if (current->namespace_uri().has_value()) {
+            auto prefix = current->prefix().value_or(""_fly_string);
+            add_prefix(prefix);
+        }
+
+        if (auto attributes = current->attributes()) {
+            for (size_t i = 0; i < attributes->length(); ++i) {
+                auto const* attr = attributes->item(i);
+                if (attr->namespace_uri() != Web::Namespace::XMLNS)
+                    continue;
+
+                Optional<FlyString> declared_prefix;
+
+                if (!attr->prefix().has_value() && attr->local_name() == "xmlns"_fly_string) {
+                    declared_prefix = ""_fly_string;
+                } else if (attr->prefix() == "xmlns"_fly_string) {
+                    declared_prefix = attr->local_name();
+                } else {
+                    continue;
+                }
+
+                if (!attr->value().is_empty())
+                    add_prefix(*declared_prefix);
+                seen_prefixes.set(*declared_prefix); // Mark as seen even if the value is empty
+            }
+        }
+
+        current = current->parent_element();
+    }
+
+    return prefixes;
+}
+
 // https://dom.spec.whatwg.org/#locate-a-namespace
 Optional<String> Node::locate_a_namespace(Optional<String> const& prefix) const
 {
@@ -3000,7 +3065,7 @@ ErrorOr<String> Node::name_or_description(NameOrDescription target, Document con
             //    following the “iii. For each child node of the current node” code.
             if (auto before = element->get_pseudo_element_node(CSS::PseudoElement::Before)) {
                 if (before->computed_values().content().alt_text.has_value()) {
-                    total_accumulated_text.append(before->computed_values().content().alt_text.release_value());
+                    total_accumulated_text.append(before->computed_values().content().alt_text.value());
                 } else {
                     for (auto& item : before->computed_values().content().data) {
                         if (auto const* string = item.get_pointer<String>())
@@ -3060,7 +3125,7 @@ ErrorOr<String> Node::name_or_description(NameOrDescription target, Document con
             // NOTE: See step ii.b above.
             if (auto after = element->get_pseudo_element_node(CSS::PseudoElement::After)) {
                 if (after->computed_values().content().alt_text.has_value()) {
-                    total_accumulated_text.append(after->computed_values().content().alt_text.release_value());
+                    total_accumulated_text.append(after->computed_values().content().alt_text.value());
                 } else {
                     for (auto& item : after->computed_values().content().data) {
                         if (auto const* string = item.get_pointer<String>())

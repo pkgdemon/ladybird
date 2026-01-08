@@ -109,7 +109,7 @@ print_help() {
       list-tests: $NAME list-tests [PATHS..]
                       List the tests in the given PATHS.
       clean:      $NAME clean
-                      Clean up the extra resources and directories (if any leftover) created by this script.
+                      Clean up the extra resources and directories (if any leftover) created by this script (Linux only).
       bisect:     $NAME bisect BAD_COMMIT GOOD_COMMIT [TESTS...]
                       Find the first commit where a given set of tests produce unexpected results.
 
@@ -298,11 +298,12 @@ cleanup_run_dirs() {
             [ "${#pids_in_use[@]}" = 0 ] && break
                 echo Trying to kill procs: "${pids_in_use[@]}"
                 kill -INT "${pids_in_use[@]}" 2>/dev/null || true
-            done
-            sudo_and_ask "" umount "$mount_path" || true
         done
-        rm -fr "${BUILD_DIR}/wpt"
-    }
+        sudo_and_ask "" umount "$mount_path" || true
+    done
+    rm -fr "${BUILD_DIR}/wpt"
+}
+
 cleanup_merge_dirs_and_infra() {
     # Cleanup is only needed on Linux
     if [[ $OSTYPE == 'linux'* ]]; then
@@ -755,8 +756,12 @@ if [[ "$CMD" =~ ^(update|clean|run|serve|bisect|compare|import|list-tests)$ ]]; 
             run_wpt "${@}"
             ;;
         clean)
-            cleanup_run_infra
-            cleanup_run_dirs true
+            if [[ $OSTYPE == 'linux'* ]]; then
+                cleanup_run_infra
+                cleanup_run_dirs true
+            else
+                echo "Cleanup is only needed on Linux"
+            fi
             ;;
         serve)
             serve_wpt

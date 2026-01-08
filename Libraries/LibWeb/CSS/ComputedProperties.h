@@ -26,6 +26,14 @@
 
 namespace Web::CSS {
 
+struct TransitionProperties {
+    Vector<PropertyID> properties;
+    double duration;
+    EasingFunction timing_function;
+    double delay;
+    TransitionBehavior transition_behavior;
+};
+
 enum class AnimatedPropertyResultOfTransition : u8 {
     No,
     Yes
@@ -98,6 +106,7 @@ public:
     CSSPixels text_underline_offset() const;
     TextUnderlinePosition text_underline_position() const;
     Vector<BackgroundLayerData> background_layers() const;
+    BackgroundBox background_color_clip() const;
     Length border_spacing_horizontal(Layout::Node const&) const;
     Length border_spacing_vertical(Layout::Node const&) const;
     CaptionSide caption_side() const;
@@ -205,6 +214,7 @@ public:
         FlyString name;
     };
     Vector<AnimationProperties> animations() const;
+    Vector<TransitionProperties> transitions() const;
 
     Display display_before_box_type_transformation() const;
     void set_display_before_box_type_transformation(Display value);

@@ -224,4 +224,11 @@ PropertyAttributes PropertyDescriptor::attributes() const
     return { attributes };
 }
 
+void PropertyDescriptor::visit_edges(GC::Cell::Visitor& visitor)
+{
+    visitor.visit(value);
+    visitor.visit(get);
+    visitor.visit(set);
+}
+
 }

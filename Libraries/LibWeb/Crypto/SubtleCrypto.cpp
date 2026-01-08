@@ -1303,6 +1303,7 @@ GC::Ref<WebIDL::Promise> SubtleCrypto::decapsulate_key(AlgorithmIdentifier decap
         //     internal slot of decapsulationKey using decapsulationKey and ciphertext.
         auto maybe_decapsulated_bits = normalized_decapsulation_algorithm.methods->decapsulate(
             *normalized_decapsulation_algorithm.parameter,
+            decapsulation_key,
             cipher_text);
         if (maybe_decapsulated_bits.is_error()) {
             throw_in_this_context(Bindings::exception_to_throw_completion(realm.vm(), maybe_decapsulated_bits.release_error()).release_value());
@@ -1314,7 +1315,7 @@ GC::Ref<WebIDL::Promise> SubtleCrypto::decapsulate_key(AlgorithmIdentifier decap
         //     normalizedSharedKeyAlgorithm using "raw-secret" as format, the decapsulatedBits as keyData,
         //     sharedKeyAlgorithm as algorithm and using extractable and usages.
         auto maybe_shared_key = normalized_shared_key_algorithm.methods->import_key(
-            *normalized_decapsulation_algorithm.parameter,
+            *normalized_shared_key_algorithm.parameter,
             Bindings::KeyFormat::RawSecret,
             decapsulated_bits->buffer(),
             extractable,
@@ -1401,6 +1402,7 @@ GC::Ref<WebIDL::Promise> SubtleCrypto::decapsulate_bits(AlgorithmIdentifier deca
         //     internal slot of decapsulationKey using decapsulationKey and ciphertext.
         auto maybe_decapsulated_bits = normalized_decapsulation_algorithm.methods->decapsulate(
             *normalized_decapsulation_algorithm.parameter,
+            decapsulation_key,
             cipher_text);
         if (maybe_decapsulated_bits.is_error()) {
             throw_in_this_context(Bindings::exception_to_throw_completion(realm.vm(), maybe_decapsulated_bits.release_error()).release_value());
@@ -1594,7 +1596,16 @@ SupportedAlgorithmsMap const& supported_algorithms()
     for (auto const& name : { "ML-KEM-512"_string, "ML-KEM-768"_string, "ML-KEM-1024"_string }) {
         define_an_algorithm<MLKEM>("generateKey"_string, name);
         define_an_algorithm<MLKEM>("importKey"_string, name);
+        define_an_algorithm<MLKEM>("exportKey"_string, name);
         define_an_algorithm<MLKEM>("encapsulate"_string, name);
+        define_an_algorithm<MLKEM>("decapsulate"_string, name);
+    }
+
+    // https://wicg.github.io/webcrypto-modern-algos/#argon2-registration
+    for (auto const& algorithm : { "Argon2d"_string, "Argon2i"_string, "Argon2id"_string }) {
+        define_an_algorithm<Argon2>("importKey"_string, algorithm);
+        define_an_algorithm<Argon2, Argon2Params>("deriveBits"_string, algorithm);
+        define_an_algorithm<Argon2>("get key length"_string, algorithm);
     }
 
     return internal_object;

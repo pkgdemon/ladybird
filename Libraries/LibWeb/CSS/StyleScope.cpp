@@ -22,9 +22,60 @@
 
 namespace Web::CSS {
 
+void RuleCaches::visit_edges(GC::Cell::Visitor& visitor)
+{
+    main.visit_edges(visitor);
+    for (auto& it : by_layer) {
+        it.value->visit_edges(visitor);
+    }
+}
+
 void StyleScope::visit_edges(GC::Cell::Visitor& visitor)
 {
+    visitor.visit(m_node);
     visitor.visit(m_user_style_sheet);
+    for (auto& cache : m_pseudo_class_rule_cache) {
+        if (cache)
+            cache->visit_edges(visitor);
+    }
+    if (m_author_rule_cache)
+        m_author_rule_cache->visit_edges(visitor);
+    if (m_user_rule_cache)
+        m_user_rule_cache->visit_edges(visitor);
+    if (m_user_agent_rule_cache)
+        m_user_agent_rule_cache->visit_edges(visitor);
+}
+
+void MatchingRule::visit_edges(GC::Cell::Visitor& visitor)
+{
+    visitor.visit(shadow_root);
+    visitor.visit(rule);
+    visitor.visit(sheet);
+}
+
+void RuleCache::visit_edges(GC::Cell::Visitor& visitor)
+{
+    auto visit_vector = [&](auto& vector) {
+        for (auto& rule : vector)
+            rule.visit_edges(visitor);
+    };
+    auto visit_map = [&](auto& map) {
+        for (auto& [_, rules] : map) {
+            visit_vector(rules);
+        }
+    };
+
+    visit_map(rules_by_id);
+    visit_map(rules_by_class);
+    visit_map(rules_by_tag_name);
+    visit_map(rules_by_attribute_name);
+    for (auto& rules : rules_by_pseudo_element) {
+        visit_vector(rules);
+    }
+    visit_vector(root_rules);
+    visit_vector(slotted_rules);
+    visit_vector(part_rules);
+    visit_vector(other_rules);
 }
 
 StyleScope::StyleScope(GC::Ref<DOM::Node> node)
@@ -249,6 +300,16 @@ void StyleScope::make_rule_cache_for_cascade_origin(CascadeOrigin cascade_origin
                 auto key = static_cast<u64>(keyframe.key().value() * Animations::KeyframeEffect::AnimationKeyFrameKeyScaleFactor);
                 auto const& keyframe_style = *keyframe.style();
                 for (auto const& it : keyframe_style.properties()) {
+                    if (it.property_id == PropertyID::AnimationComposition) {
+                        auto composition_str = it.value->to_string(SerializationMode::Normal);
+                        AnimationComposition composition = AnimationComposition::Replace;
+                        if (composition_str == "add"sv)
+                            composition = AnimationComposition::Add;
+                        else if (composition_str == "accumulate"sv)
+                            composition = AnimationComposition::Accumulate;
+                        resolved_keyframe.composite = Animations::css_animation_composition_to_bindings_composite_operation_or_auto(composition);
+                        continue;
+                    }
                     if (!is_animatable_property(it.property_id))
                         continue;
 

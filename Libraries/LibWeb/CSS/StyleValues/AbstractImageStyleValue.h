@@ -158,16 +158,11 @@ struct InterpolationMethod {
 };
 
 struct ColorStopListElement {
-    struct ColorHint {
-        NonnullRefPtr<StyleValue const> value;
-        bool operator==(ColorHint const&) const = default;
-    };
-
-    Optional<ColorHint> transition_hint;
+    ValueComparingRefPtr<StyleValue const> transition_hint;
     struct ColorStop {
-        RefPtr<StyleValue const> color;
-        RefPtr<StyleValue const> position;
-        RefPtr<StyleValue const> second_position {};
+        ValueComparingRefPtr<StyleValue const> color;
+        ValueComparingRefPtr<StyleValue const> position;
+        ValueComparingRefPtr<StyleValue const> second_position {};
         bool operator==(ColorStop const&) const = default;
     } color_stop;
 

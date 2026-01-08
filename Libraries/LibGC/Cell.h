@@ -16,6 +16,7 @@
 #include <AK/Weakable.h>
 #include <LibGC/Forward.h>
 #include <LibGC/Internals.h>
+#include <LibGC/NanBoxedValue.h>
 #include <LibGC/Ptr.h>
 
 namespace GC {
@@ -42,6 +43,9 @@ class GC_API Cell {
     AK_MAKE_NONMOVABLE(Cell);
 
 public:
+    static constexpr bool OVERRIDES_MUST_SURVIVE_GARBAGE_COLLECTION = false;
+    static constexpr bool OVERRIDES_FINALIZE = false;
+
     virtual ~Cell() = default;
 
     bool is_marked() const { return m_mark; }
@@ -101,10 +105,24 @@ public:
         }
 
         template<typename T>
+        void visit(ReadonlySpan<T> span)
+        requires(IsBaseOf<NanBoxedValue, T>)
+        {
+            visit_impl(ReadonlySpan<NanBoxedValue>(span.data(), span.size()));
+        }
+
+        template<typename T>
         void visit(Span<T> span)
         {
             for (auto& value : span)
                 visit(value);
+        }
+
+        template<typename T>
+        void visit(Span<T> span)
+        requires(IsBaseOf<NanBoxedValue, T>)
+        {
+            visit_impl(ReadonlySpan<NanBoxedValue>(span.data(), span.size()));
         }
 
         template<typename T, size_t inline_capacity>
@@ -112,6 +130,13 @@ public:
         {
             for (auto& value : vector)
                 visit(value);
+        }
+
+        template<typename T, size_t inline_capacity>
+        void visit(Vector<T, inline_capacity> const& vector)
+        requires(IsBaseOf<NanBoxedValue, T>)
+        {
+            visit_impl(ReadonlySpan<NanBoxedValue>(vector.span().data(), vector.size()));
         }
 
         template<typename T>
@@ -150,6 +175,13 @@ public:
             }
         }
 
+        template<typename T>
+        void visit(Optional<T> const& optional)
+        {
+            if (optional.has_value())
+                visit(optional.value());
+        }
+
         void visit(NanBoxedValue const& value) SWIFT_NAME(visitValue(_:));
 
         // Allow explicitly ignoring a GC-allocated member in a visit_edges implementation instead
@@ -163,6 +195,7 @@ public:
 
     protected:
         virtual void visit_impl(Cell&) = 0;
+        virtual void visit_impl(ReadonlySpan<NanBoxedValue>) = 0;
         virtual ~Visitor() = default;
     } SWIFT_UNSAFE_REFERENCE;
 
@@ -173,21 +206,16 @@ public:
 
     // This allows cells to survive GC by choice, even if nothing points to them.
     // It's used to implement special rules in the web platform.
-    // NOTE: Cells must call set_overrides_must_survive_garbage_collection() for this to be honored.
+    // NOTE: Cell types must have OVERRIDES_MUST_SURVIVE_GARBAGE_COLLECTION set for this to be called.
     virtual bool must_survive_garbage_collection() const { return false; }
-
-    bool overrides_must_survive_garbage_collection(Badge<Heap>) const { return m_overrides_must_survive_garbage_collection; }
 
     ALWAYS_INLINE Heap& heap() const { return HeapBlockBase::from_cell(this)->heap(); }
 
 protected:
     Cell() = default;
 
-    void set_overrides_must_survive_garbage_collection(bool b) { m_overrides_must_survive_garbage_collection = b; }
-
 private:
     bool m_mark { false };
-    bool m_overrides_must_survive_garbage_collection { false };
     State m_state { State::Live };
 } SWIFT_UNSAFE_REFERENCE;
 

@@ -25,7 +25,7 @@ ColorStopListElement ColorStopListElement::absolutized(ComputationContext const&
     };
 
     return {
-        .transition_hint = transition_hint,
+        .transition_hint = absolutize_if_nonnull(transition_hint),
         .color_stop = {
             .color = absolutize_if_nonnull(color_stop.color),
             .position = absolutize_if_nonnull(color_stop.position),
@@ -41,8 +41,8 @@ void serialize_color_stop_list(StringBuilder& builder, Vector<ColorStopListEleme
         if (!first)
             builder.append(", "sv);
 
-        if (element.transition_hint.has_value())
-            builder.appendff("{}, "sv, element.transition_hint->value->to_string(mode));
+        if (element.transition_hint)
+            builder.appendff("{}, "sv, element.transition_hint->to_string(mode));
 
         builder.append(element.color_stop.color->to_string(mode));
         if (element.color_stop.position)

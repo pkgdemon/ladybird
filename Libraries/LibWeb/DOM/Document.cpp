@@ -1410,9 +1410,6 @@ void Document::update_layout(UpdateLayoutReason reason)
     });
 
     m_layout_root->for_each_in_inclusive_subtree_of_type<Layout::Box>([&](auto& child) {
-        if (child.needs_layout_update()) {
-            child.reset_cached_intrinsic_sizes();
-        }
         child.clear_contained_abspos_children();
         return TraversalDecision::Continue;
     });
@@ -1611,6 +1608,7 @@ void Document::update_style()
 
     evaluate_media_rules();
 
+    style_computer().reset_has_result_cache();
     style_computer().reset_ancestor_filter();
 
     auto invalidation = update_style_recursively(*this, style_computer(), false, false);
