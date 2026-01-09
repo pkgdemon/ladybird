@@ -113,13 +113,22 @@ void ViewImplementation::create_new_process_for_cross_site_navigation(URL::URL c
 
 void ViewImplementation::server_did_paint(Badge<WebContentClient>, i32 bitmap_id, Gfx::IntSize size)
 {
+    dbgln("ViewImplementation::server_did_paint: bitmap_id={} size={}x{} back_bitmap_id={}",
+          bitmap_id, size.width(), size.height(), m_client_state.back_bitmap.id);
     if (m_client_state.back_bitmap.id == bitmap_id) {
+        dbgln("ViewImplementation::server_did_paint: bitmap IDs match, calling on_ready_to_paint");
         m_client_state.has_usable_bitmap = true;
         m_client_state.back_bitmap.last_painted_size = size.to_type<Web::DevicePixels>();
         swap(m_client_state.back_bitmap, m_client_state.front_bitmap);
         m_backup_bitmap = nullptr;
-        if (on_ready_to_paint)
+        if (on_ready_to_paint) {
+            dbgln("ViewImplementation::server_did_paint: on_ready_to_paint callback exists, calling it");
             on_ready_to_paint();
+        } else {
+            dbgln("ViewImplementation::server_did_paint: on_ready_to_paint callback is null!");
+        }
+    } else {
+        dbgln("ViewImplementation::server_did_paint: bitmap ID mismatch, ignoring");
     }
 
     client().async_ready_to_paint(page_id());

@@ -346,11 +346,15 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
         auto* button = Ladybird::create_application_button([[[self tab] web_view] view].navigate_back_action());
         [_navigate_back_toolbar_item setView:button];
 #else
-        // GNUstep: Use NSToolbarItem's native image support instead of custom view
-        [_navigate_back_toolbar_item setImage:[NSImage imageNamed:@"common_ArrowLeft"]];
-        [_navigate_back_toolbar_item setLabel:@"Back"];
-        [_navigate_back_toolbar_item setTarget:self];
-        [_navigate_back_toolbar_item setAction:@selector(navigateBack:)];
+        // GNUstep: Use text button with Unicode character for consistent styling
+        auto* button = [[NSButton alloc] initWithFrame:NSMakeRect(0, 0, 24, 24)];
+        [button setTitle:@"\u25C0"];  // ◀ Unicode left arrow
+        [button setBordered:YES];
+        [button setTarget:self];
+        [button setAction:@selector(navigateBack:)];
+        [_navigate_back_toolbar_item setView:button];
+        [_navigate_back_toolbar_item setMinSize:NSMakeSize(24.0, 24.0)];
+        [_navigate_back_toolbar_item setMaxSize:NSMakeSize(24.0, 24.0)];
 #endif
     }
 
@@ -365,11 +369,15 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
         auto* button = Ladybird::create_application_button([[[self tab] web_view] view].navigate_forward_action());
         [_navigate_forward_toolbar_item setView:button];
 #else
-        // GNUstep: Use NSToolbarItem's native image support instead of custom view
-        [_navigate_forward_toolbar_item setImage:[NSImage imageNamed:@"common_ArrowRight"]];
-        [_navigate_forward_toolbar_item setLabel:@"Forward"];
-        [_navigate_forward_toolbar_item setTarget:self];
-        [_navigate_forward_toolbar_item setAction:@selector(navigateForward:)];
+        // GNUstep: Use text button with Unicode character for consistent styling
+        auto* button = [[NSButton alloc] initWithFrame:NSMakeRect(0, 0, 24, 24)];
+        [button setTitle:@"\u25B6"];  // ▶ Unicode right arrow
+        [button setBordered:YES];
+        [button setTarget:self];
+        [button setAction:@selector(navigateForward:)];
+        [_navigate_forward_toolbar_item setView:button];
+        [_navigate_forward_toolbar_item setMinSize:NSMakeSize(24.0, 24.0)];
+        [_navigate_forward_toolbar_item setMaxSize:NSMakeSize(24.0, 24.0)];
 #endif
     }
 
@@ -411,6 +419,11 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
         [location_search_field setPlaceholderString:@"Enter web address"];
         [location_search_field setTextColor:[NSColor textColor]];
         [location_search_field setDelegate:self];
+#if !LADYBIRD_APPLE
+        // GNUstep: NSTextField sends action on enter key, not via control:textView:doCommandBySelector:
+        [location_search_field setTarget:self];
+        [location_search_field setAction:@selector(locationFieldAction:)];
+#endif
 
         if (@available(macOS 26, *)) {
             [location_search_field setBordered:YES];
@@ -571,6 +584,9 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
     // Make the window visible
     [self.window makeKeyAndOrderFront:sender];
 
+    // Update viewport rect after toolbar modifies content view frame
+    [[[self tab] web_view] handleResize];
+
     NSLog(@"showWindow: window visible, content frame=%@",
           NSStringFromRect([[self.window contentView] frame]));
     fflush(stderr);
@@ -653,6 +669,20 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
 - (void)resetZoom:(id)sender
 {
     [[[self tab] web_view] view].reset_zoom_action().activate();
+}
+
+- (void)locationFieldAction:(id)sender
+{
+    NSLog(@"locationFieldAction: enter key pressed");
+    fflush(stderr);
+
+    auto* location_search_field = (LocationSearchField*)[self.location_toolbar_item view];
+    auto location = Ladybird::ns_string_to_string([location_search_field stringValue]);
+
+    NSLog(@"locationFieldAction: navigating to: %s", location.to_byte_string().characters());
+    fflush(stderr);
+
+    [self navigateToLocation:move(location)];
 }
 #endif
 
