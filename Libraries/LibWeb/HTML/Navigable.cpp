@@ -2522,8 +2522,11 @@ void Navigable::set_viewport_size(CSSPixelSize size)
     }
 }
 
-void Navigable::perform_scroll_of_viewport(CSSPixelPoint new_position)
+void Navigable::perform_scroll_of_viewport_scrolling_box(CSSPixelPoint new_position)
 {
+    // NB: This method is ad-hoc, but is currently called where "perform a scroll of a scrolling box" would be,
+    //     where the box is the viewport.
+    //     https://drafts.csswg.org/cssom-view/#perform-a-scroll
     if (m_viewport_scroll_offset != new_position) {
         m_viewport_scroll_offset = new_position;
         scroll_offset_did_change();
@@ -2799,8 +2802,13 @@ RefPtr<Gfx::SkiaBackendContext> Navigable::skia_backend_context() const
     return m_skia_backend_context;
 }
 
+GC::Ref<WebIDL::Promise> Navigable::scroll_viewport_by_delta(CSSPixelPoint delta)
+{
+    return perform_a_scroll_of_the_viewport(m_viewport_scroll_offset + delta);
+}
+
 // https://drafts.csswg.org/cssom-view/#viewport-perform-a-scroll
-void Navigable::scroll_viewport_by_delta(CSSPixelPoint delta)
+GC::Ref<WebIDL::Promise> Navigable::perform_a_scroll_of_the_viewport(CSSPixelPoint position)
 {
     // 1. Let doc be the viewport’s associated Document.
     auto doc = active_document();
@@ -2817,12 +2825,10 @@ void Navigable::scroll_viewport_by_delta(CSSPixelPoint delta)
     auto max_y = viewport_rect.height().to_double() - vv->height();
 
     // 5. Let dx be the horizontal component of position - the value vv’s pageLeft attribute
-    // NOTE: Function accepts delta so we use that directly.
-    auto dx = delta.x().to_double();
+    auto dx = position.x().to_double() - vv->page_left();
 
     // 6. Let dy be the vertical component of position - the value of vv’s pageTop attribute
-    // NOTE: Function accepts delta so we use that directly.
-    auto dy = delta.y().to_double();
+    auto dy = position.y().to_double() - vv->page_top();
 
     // 7. Let visual x be the value of vv’s offsetLeft attribute.
     auto visual_x = vv->offset_left();
@@ -2844,19 +2850,38 @@ void Navigable::scroll_viewport_by_delta(CSSPixelPoint delta)
 
     // 13. Let element be doc’s root element if there is one, null otherwise.
 
-    // 14. Perform a scroll of the viewport’s scrolling box to its current scroll position + (layout dx, layout dy) with element as the associated element, and behavior as the scroll behavior.
+    // 14. Perform a scroll of the viewport’s scrolling box to its current scroll position + (layout dx, layout dy)
+    //     with element as the associated element, and behavior as the scroll behavior. Let scrollPromise1 be the
+    //     Promise returned from this step.
+    TemporaryExecutionContext temporary_execution_context { doc->realm() };
+
+    // AD-HOC: Skip scrolling unscrollable boxes.
     if (!doc->paintable_box()->could_be_scrolled_by_wheel_event())
-        return;
+        return WebIDL::create_resolved_promise(doc->realm(), JS::js_undefined());
+
     auto scrolling_area = doc->paintable_box()->scrollable_overflow_rect()->to_type<float>();
     auto new_viewport_scroll_offset = m_viewport_scroll_offset.to_type<double>() + Gfx::Point(layout_dx, layout_dy);
     // NOTE: Clamp to the scrolling area.
     new_viewport_scroll_offset.set_x(max(0.0, min(new_viewport_scroll_offset.x(), scrolling_area.width() - viewport_size().width().to_double())));
     new_viewport_scroll_offset.set_y(max(0.0, min(new_viewport_scroll_offset.y(), scrolling_area.height() - viewport_size().height().to_double())));
-    perform_scroll_of_viewport(new_viewport_scroll_offset.to_type<CSSPixels>());
+    // FIXME: Get a Promise from this.
+    perform_scroll_of_viewport_scrolling_box(new_viewport_scroll_offset.to_type<CSSPixels>());
 
-    // 15. Perform a scroll of vv’s scrolling box to its current scroll position + (visual dx, visual dy) with element as the associated element, and behavior as the scroll behavior.
+    // 15. Perform a scroll of vv’s scrolling box to its current scroll position + (visual dx, visual dy) with element
+    //     as the associated element, and behavior as the scroll behavior. Let scrollPromise2 be the Promise returned
+    //     from this step.
+    // FIXME: Get a Promise from this.
     vv->scroll_by({ visual_dx, visual_dy });
     doc->set_needs_display(InvalidateDisplayList::No);
+
+    // 16. Let scrollPromise be a new Promise.
+    auto scroll_promise = WebIDL::create_promise(doc->realm());
+
+    // 17. Return scrollPromise, and run the remaining steps in parallel.
+    // 18. Resolve scrollPromise when both scrollPromise1 and scrollPromise2 have settled.
+    // FIXME: Actually wait for scroll to occur. For now, all our scrolls are instant.
+    WebIDL::resolve_promise(doc->realm(), scroll_promise);
+    return scroll_promise;
 }
 
 void Navigable::reset_zoom()

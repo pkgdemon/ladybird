@@ -1096,22 +1096,31 @@ ParseResult<Expression> Expression::parse(ConstrainedStream& stream, Optional<si
             }
             // Patch the end_ip of the last structured instruction
             auto entry = stack.take_last();
-            instructions[entry.value()].arguments().visit(
+            bool valid_type = instructions[entry.value()].arguments().visit(
                 [&](Instruction::StructuredInstructionArgs& args) {
                     args.end_ip = ip + (args.else_ip.has_value() ? 1 : 0);
+                    return true;
                 },
                 [&](Instruction::TryTableArgs& args) {
                     args.try_.end_ip = ip + 1;
+                    return true;
                 },
-                [](auto&) { VERIFY_NOT_REACHED(); });
+                [](auto&) { return false; });
+
+            if (!valid_type)
+                return ParseError::InvalidType;
+
             break;
         }
         case Instructions::structured_else.value(): {
             if (stack.is_empty())
                 return ParseError::UnknownInstruction;
             auto entry = stack.last();
-            auto& args = instructions[entry.value()].arguments().get<Instruction::StructuredInstructionArgs>();
-            args.else_ip = ip + 1;
+            auto* args = instructions[entry.value()].arguments().get_pointer<Instruction::StructuredInstructionArgs>();
+            if (!args)
+                return ParseError::InvalidType;
+
+            args->else_ip = ip + 1;
             break;
         }
         }
@@ -1343,19 +1352,8 @@ ParseResult<TagSection> TagSection::parse(ConstrainedStream& stream)
 {
     ScopeLogger<WASM_BINPARSER_DEBUG> logger("TagSection"sv);
     // https://webassembly.github.io/exception-handling/core/binary/modules.html#binary-tagsec
-    auto tags = TRY(parse_vector<Tag>(stream));
+    auto tags = TRY(parse_vector<TagType>(stream));
     return TagSection { move(tags) };
-}
-
-ParseResult<TagSection::Tag> TagSection::Tag::parse(ConstrainedStream& stream)
-{
-    // https://webassembly.github.io/exception-handling/core/binary/modules.html#binary-tagsec
-    ScopeLogger<WASM_BINPARSER_DEBUG> logger("Tag"sv);
-    auto flag = TRY_READ(stream, u8, ParseError::ExpectedKindTag);
-    if (flag != 0)
-        return ParseError::InvalidTag; // currently the only valid flag is 0
-    auto type_index = TRY(GenericIndexParser<TypeIndex>::parse(stream));
-    return TagSection::Tag { type_index, static_cast<TagSection::Tag::Flags>(flag) };
 }
 
 ParseResult<SectionId> SectionId::parse(Stream& stream)

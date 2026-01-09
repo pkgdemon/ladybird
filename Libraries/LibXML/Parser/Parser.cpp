@@ -7,11 +7,14 @@
 #include <AK/StringBuilder.h>
 #include <LibXML/Parser/Parser.h>
 
+#include <libxml/encoding.h>
 #include <libxml/parser.h>
 #include <libxml/parserInternals.h>
 #include <libxml/xmlerror.h>
 
 namespace XML {
+
+static constexpr int MAX_XML_TREE_DEPTH = 5000;
 
 struct ParserContext {
     Listener* listener { nullptr };
@@ -25,6 +28,8 @@ struct ParserContext {
     Version version { Version::Version11 };
 
     Vector<ParseError> parse_errors;
+
+    int depth { 0 };
 };
 
 static ByteString xml_char_to_byte_string(xmlChar const* str)
@@ -89,6 +94,24 @@ static void start_element_ns_handler(void* ctx, xmlChar const* localname, xmlCha
     auto* context = static_cast<ParserContext*>(parser_ctx->_private);
     if (!context)
         return;
+
+    if (++context->depth > MAX_XML_TREE_DEPTH) {
+        size_t offset = 0;
+        if (parser_ctx->input && parser_ctx->input->cur && parser_ctx->input->base)
+            offset = static_cast<size_t>(parser_ctx->input->cur - parser_ctx->input->base);
+
+        ParseError parse_error {
+            .position = LineTrackingLexer::Position { .offset = offset },
+            .error = ByteString("Excessive node nesting."sv),
+        };
+        context->parse_errors.append(parse_error);
+
+        if (context->listener)
+            context->listener->error(parse_error);
+
+        xmlStopParser(parser_ctx);
+        return;
+    }
 
     StringBuilder name_builder;
     if (prefix) {
@@ -160,6 +183,8 @@ static void end_element_ns_handler(void* ctx, xmlChar const* localname, xmlChar 
     auto* context = static_cast<ParserContext*>(parser_ctx->_private);
     if (!context)
         return;
+
+    --context->depth;
 
     StringBuilder name_builder;
     if (prefix) {
@@ -360,6 +385,8 @@ ErrorOr<void, ParseError> Parser::parse_with_listener(Listener& listener)
     parser_ctx->_private = &context;
     xmlCtxtUseOptions(parser_ctx, options);
 
+    xmlSwitchEncoding(parser_ctx, XML_CHAR_ENCODING_UTF8);
+
     auto result = xmlParseChunk(parser_ctx, m_source.characters_without_null_termination(), static_cast<int>(m_source.length()), 1);
 
     bool well_formed = parser_ctx->wellFormed;
@@ -398,6 +425,8 @@ ErrorOr<Document, ParseError> Parser::parse()
 
     parser_ctx->_private = &context;
     xmlCtxtUseOptions(parser_ctx, options);
+
+    xmlSwitchEncoding(parser_ctx, XML_CHAR_ENCODING_UTF8);
 
     auto result = xmlParseChunk(parser_ctx, m_source.characters_without_null_termination(), static_cast<int>(m_source.length()), 1);
 
