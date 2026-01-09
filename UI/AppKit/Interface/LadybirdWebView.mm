@@ -1075,15 +1075,23 @@ struct HideCursor {
     CGImageRelease(bitmap_image);
 #else
     // GNUstep: Use NSBitmapImageRep for rendering
-    // Note: BGRA8888 format - we need to swap bytes for proper display
+    // Skia provides BGRA8888 format, but GNUstep expects RGBA
     auto width = bitmap_size.width();
     auto height = bitmap_size.height();
+    auto const* bgra_data = bitmap.scanline_u8(0);
+    auto data_size = bitmap.size_in_bytes();
 
-    // Create a copy with RGBA byte order for GNUstep
-    auto* bitmap_data = const_cast<unsigned char*>(bitmap.scanline_u8(0));
+    // Convert BGRA to RGBA by swapping red and blue channels
+    auto* rgba_data = new unsigned char[data_size];
+    for (size_t i = 0; i < data_size; i += 4) {
+        rgba_data[i + 0] = bgra_data[i + 2]; // R <- B
+        rgba_data[i + 1] = bgra_data[i + 1]; // G <- G
+        rgba_data[i + 2] = bgra_data[i + 0]; // B <- R
+        rgba_data[i + 3] = bgra_data[i + 3]; // A <- A
+    }
 
     NSBitmapImageRep* bitmap_rep = [[NSBitmapImageRep alloc]
-        initWithBitmapDataPlanes:&bitmap_data
+        initWithBitmapDataPlanes:&rgba_data
                       pixelsWide:width
                       pixelsHigh:height
                    bitsPerSample:BITS_PER_COMPONENT
@@ -1091,14 +1099,13 @@ struct HideCursor {
                         hasAlpha:YES
                         isPlanar:NO
                   colorSpaceName:NSDeviceRGBColorSpace
-                    bitmapFormat:(NSBitmapFormat)(NSBitmapFormatAlphaFirst | NSBitmapFormatThirtyTwoBitLittleEndian)
+                    bitmapFormat:(NSBitmapFormat)0
                      bytesPerRow:bitmap.pitch()
                     bitsPerPixel:BITS_PER_PIXEL];
 
     if (bitmap_rep) {
         NSImage* image = [[NSImage alloc] initWithSize:NSMakeSize(width, height)];
         [image addRepresentation:bitmap_rep];
-        // Use respectFlipped:YES to properly handle the flipped coordinate system
         [image drawInRect:rect
                  fromRect:NSZeroRect
                 operation:NSCompositeCopy
@@ -1106,6 +1113,8 @@ struct HideCursor {
            respectFlipped:YES
                     hints:nil];
     }
+
+    delete[] rgba_data;
 #endif
 
     [super drawRect:rect];
