@@ -16,6 +16,9 @@
 
 @class Tab;
 @class TabController;
+#if LADYBIRD_HAS_NSTABVIEW
+@class GNUstepBrowserWindow;
+#endif
 
 @interface ApplicationDelegate : NSObject <NSApplicationDelegate>
 

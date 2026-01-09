@@ -13,6 +13,10 @@
 #import <Interface/Tab.h>
 #import <Interface/TabController.h>
 #import <Utilities/Conversions.h>
+#if LADYBIRD_HAS_NSTABVIEW
+#import <Interface/BrowserTab.h>
+#import <Interface/GNUstepBrowserWindow.h>
+#endif
 
 #if !__has_feature(objc_arc)
 #    error "This project requires ARC"
@@ -21,8 +25,12 @@
 @interface ApplicationDelegate ()
 
 @property (nonatomic, strong) NSMutableArray<TabController*>* managed_tabs;
-#if !LADYBIRD_APPLE
-// GNUstep: Need to explicitly retain windows to prevent ARC deallocation
+#if LADYBIRD_HAS_NSTABVIEW
+// GNUstep with NSTabView: Single browser window with tabbed interface
+@property (nonatomic, strong) GNUstepBrowserWindow* browserWindow;
+@property (nonatomic, assign) BOOL hasFinishedLaunching;
+#elif !LADYBIRD_APPLE
+// GNUstep without NSTabView: Need to explicitly retain windows to prevent ARC deallocation
 @property (nonatomic, strong) NSMutableArray<Tab*>* managed_windows;
 @property (nonatomic, assign) BOOL hasFinishedLaunching;
 #endif
@@ -68,7 +76,10 @@
         [[NSApp mainMenu] addItem:[self createHelpMenu]];
 
         self.managed_tabs = [[NSMutableArray alloc] init];
-#if !LADYBIRD_APPLE
+#if LADYBIRD_HAS_NSTABVIEW
+        self.browserWindow = nil;
+        self.hasFinishedLaunching = NO;
+#elif !LADYBIRD_APPLE
         self.managed_windows = [[NSMutableArray alloc] init];
         self.hasFinishedLaunching = NO;
 #endif
@@ -156,7 +167,10 @@
 
 - (void)removeTab:(TabController*)controller
 {
-#if !LADYBIRD_APPLE
+#if LADYBIRD_HAS_NSTABVIEW
+    // NSTabView mode: tabs are managed by browserWindow, not here
+    // This method may still be called for compatibility
+#elif !LADYBIRD_APPLE
     [self.managed_windows removeObject:(Tab*)[controller window]];
 #endif
     [self.managed_tabs removeObject:controller];
@@ -458,7 +472,33 @@
 
 - (void)applicationDidFinishLaunching:(NSNotification*)notification
 {
-#if !LADYBIRD_APPLE
+#if LADYBIRD_HAS_NSTABVIEW
+    // Guard against being called multiple times (GNUstep may call this automatically
+    // in addition to our manual call from main.mm)
+    if (self.hasFinishedLaunching) {
+        NSLog(@"applicationDidFinishLaunching: already launched, skipping");
+        fflush(stderr);
+        return;
+    }
+    self.hasFinishedLaunching = YES;
+
+    NSLog(@"applicationDidFinishLaunching: start (NSTabView mode)");
+    // GNUstep requires explicit app activation
+    [NSApp activateIgnoringOtherApps:YES];
+    NSLog(@"applicationDidFinishLaunching: app activated");
+
+    // Debug: periodically check browser window state
+    [NSTimer scheduledTimerWithTimeInterval:3.0 repeats:YES block:^(NSTimer* timer) {
+        if (self.browserWindow) {
+            NSLog(@"Timer: browserWindow=%p isVisible=%d tabCount=%lu",
+                  self.browserWindow, [self.browserWindow isVisible],
+                  (unsigned long)[self.browserWindow tabCount]);
+        } else {
+            NSLog(@"Timer: no browser window yet");
+        }
+        fflush(stderr);
+    }];
+#elif !LADYBIRD_APPLE
     // Guard against being called multiple times (GNUstep may call this automatically
     // in addition to our manual call from main.mm)
     if (self.hasFinishedLaunching) {
@@ -494,6 +534,43 @@
     if (browser_options.devtools_port.has_value())
         [self onDevtoolsEnabled];
 
+#if LADYBIRD_HAS_NSTABVIEW
+    NSLog(@"applicationDidFinishLaunching: about to create browser window with NSTabView");
+    fflush(stderr);
+
+    // Create the main browser window with NSTabView
+    self.browserWindow = [[GNUstepBrowserWindow alloc] init];
+    [self.browserWindow makeKeyAndOrderFront:nil];
+
+    if (browser_options.urls.is_empty()) {
+        NSLog(@"URLs is empty, creating blank tab");
+        fflush(stderr);
+        [self.browserWindow createNewTab];
+        NSLog(@"Tab created successfully");
+    } else {
+        NSLog(@"URLs not empty, iterating through %zu URLs", browser_options.urls.size());
+        fflush(stderr);
+        BrowserTab* firstTab = nil;
+        for (auto const& url : browser_options.urls) {
+            NSLog(@"Processing URL: %s", url.serialize().to_byte_string().characters());
+            fflush(stderr);
+
+            BrowserTab* newTab = [self.browserWindow createNewTab];
+            [newTab loadURL:url];
+
+            if (firstTab == nil) {
+                firstTab = newTab;
+            }
+        }
+        // Select the first tab
+        if (firstTab) {
+            [self.browserWindow selectTab:firstTab];
+        }
+    }
+
+    NSLog(@"applicationDidFinishLaunching: complete (NSTabView mode)");
+    fflush(stderr);
+#else
 #if !LADYBIRD_APPLE
     NSLog(@"applicationDidFinishLaunching: about to create tab");
     fflush(stderr);
@@ -535,6 +612,7 @@
             tab = (Tab*)[controller window];
         }
     }
+#endif // LADYBIRD_HAS_NSTABVIEW
 }
 
 - (void)applicationWillTerminate:(NSNotification*)notification

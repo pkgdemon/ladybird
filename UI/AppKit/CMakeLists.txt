@@ -11,7 +11,7 @@ else()
     message(FATAL_ERROR "GNUstep not found. Please install gnustep-base and gnustep-gui.")
 endif()
 
-add_library(ladybird_impl STATIC
+set(LADYBIRD_IMPL_SOURCES
     Application/Application.mm
     Application/ApplicationDelegate.mm
     Application/EventLoopImplementationMacOS.mm
@@ -28,6 +28,17 @@ add_library(ladybird_impl STATIC
     Interface/TabController.mm
     Utilities/Conversions.mm
 )
+
+# GNUstep-specific sources for NSTabView support
+if(LADYBIRD_GNUSTEP)
+    list(APPEND LADYBIRD_IMPL_SOURCES
+        Interface/BrowserTab.mm
+        Interface/BrowserToolbar.mm
+        Interface/GNUstepBrowserWindow.mm
+    )
+endif()
+
+add_library(ladybird_impl STATIC ${LADYBIRD_IMPL_SOURCES})
 target_include_directories(ladybird_impl PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>)
 
 target_compile_options(ladybird_impl PUBLIC
