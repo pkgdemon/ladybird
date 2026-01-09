@@ -1020,11 +1020,17 @@ struct HideCursor {
     auto paintable = m_web_view_bridge->paintable();
     if (!paintable.has_value()) {
 #if !LADYBIRD_APPLE
-        NSLog(@"drawRect: no paintable, calling super");
+        NSLog(@"drawRect: no paintable, drawing placeholder background");
         fflush(stderr);
-#endif
+        // GNUstep: Draw a white background when content isn't ready yet
+        // Just returning early can cause crashes because GNUstep expects something to be drawn
+        [[NSColor whiteColor] setFill];
+        NSRectFill(rect);
+        return;
+#else
         [super drawRect:rect];
         return;
+#endif
     }
 #if !LADYBIRD_APPLE
     NSLog(@"drawRect: have paintable, rendering bitmap");

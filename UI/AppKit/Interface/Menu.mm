@@ -294,7 +294,16 @@ NSMenuItem* create_application_menu_item(WebView::Action& action)
 
 NSButton* create_application_button(WebView::Action& action)
 {
+#if LADYBIRD_APPLE
     auto* button = [[NSButton alloc] init];
+#else
+    // GNUstep: Use initWithFrame: with explicit dimensions for toolbar buttons
+    auto* button = [[NSButton alloc] initWithFrame:NSMakeRect(0, 0, 24, 24)];
+    // Clear default title before initialize_native_control sets image/title
+    [button setTitle:@""];
+    // Set bordered style for toolbar buttons
+    [button setBordered:YES];
+#endif
     initialize_native_control(action, button);
     return button;
 }
@@ -315,9 +324,21 @@ void set_control_image(id control, NSString* image)
             set_image();
     }
 #else
-    // GNUstep: SF Symbols not available, skip image setting
-    (void)control;
-    (void)image;
+    // GNUstep's built-in images are very small (9x9), so use Unicode arrows instead
+    // which are more visible and scale with font size
+    NSString* textFallback = nil;
+
+    if ([image isEqualToString:@"chevron.left"]) {
+        textFallback = @"\u25C0";  // Unicode left arrow ◀
+    } else if ([image isEqualToString:@"chevron.right"]) {
+        textFallback = @"\u25B6";  // Unicode right arrow ▶
+    } else if ([image isEqualToString:@"arrow.clockwise"]) {
+        textFallback = @"\u21BB";  // Unicode clockwise arrow ↻
+    }
+
+    if (textFallback && [control isKindOfClass:[NSButton class]]) {
+        [control setTitle:textFallback];
+    }
 #endif
 }
 

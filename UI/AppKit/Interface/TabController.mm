@@ -31,7 +31,13 @@ static NSString* const TOOLBAR_ZOOM_IDENTIFIER = @"ToolbarZoomIdentifier";
 static NSString* const TOOLBAR_NEW_TAB_IDENTIFIER = @"ToolbarNewTabIdentifier";
 static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIdentifier";
 
+#if LADYBIRD_APPLE
 @interface LocationSearchField : NSSearchField
+#else
+// GNUstep: Use NSTextField instead of NSSearchField to avoid Eau theme crash
+// The Eau theme's NSSearchFieldCell+Eau.m has infinite recursion bug
+@interface LocationSearchField : NSTextField
+#endif
 
 - (BOOL)becomeFirstResponder;
 
@@ -76,10 +82,6 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
 @property (nonatomic, strong) Autocomplete* autocomplete;
 
 @property (nonatomic, assign) NSLayoutConstraint* location_toolbar_item_width;
-
-#if !LADYBIRD_APPLE
-@property (nonatomic, strong) NSTextField* gnustep_location_field;
-#endif
 
 @end
 
@@ -215,13 +217,7 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
 
 - (void)focusLocationToolbarItem
 {
-#if LADYBIRD_APPLE
     [self.window makeFirstResponder:self.location_toolbar_item.view];
-#else
-    if (self.gnustep_location_field) {
-        [self.window makeFirstResponder:self.gnustep_location_field];
-    }
-#endif
 }
 
 #pragma mark - Private methods
@@ -231,62 +227,6 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
     return (Tab*)[self window];
 }
 
-#if !LADYBIRD_APPLE
-- (void)setupGNUstepLocationBar
-{
-    // Create a simple location bar at the top of the window
-    static constexpr CGFloat LOCATION_BAR_HEIGHT = 30;
-
-    NSView* contentView = [self.window contentView];
-    NSRect contentFrame = [contentView frame];
-
-    // Create container for location bar
-    NSRect locationBarFrame = NSMakeRect(0, contentFrame.size.height - LOCATION_BAR_HEIGHT,
-                                         contentFrame.size.width, LOCATION_BAR_HEIGHT);
-    NSView* locationBar = [[NSView alloc] initWithFrame:locationBarFrame];
-    [locationBar setAutoresizingMask:NSViewWidthSizable | NSViewMinYMargin];
-
-    // Create the text field
-    NSRect textFieldFrame = NSMakeRect(5, 3, contentFrame.size.width - 10, LOCATION_BAR_HEIGHT - 6);
-    self.gnustep_location_field = [[NSTextField alloc] initWithFrame:textFieldFrame];
-    [self.gnustep_location_field setAutoresizingMask:NSViewWidthSizable];
-    [self.gnustep_location_field setPlaceholderString:@"Enter web address"];
-    [self.gnustep_location_field setDelegate:self];
-    [self.gnustep_location_field setEditable:YES];
-    [self.gnustep_location_field setBezeled:YES];
-    [self.gnustep_location_field setBezelStyle:NSTextFieldSquareBezel];
-
-    // GNUstep: Set target/action for Enter key handling (doCommandBySelector: not called)
-    [self.gnustep_location_field setTarget:self];
-    [self.gnustep_location_field setAction:@selector(gnustepLocationFieldAction:)];
-
-    [locationBar addSubview:self.gnustep_location_field];
-
-    // Add location bar to window
-    [contentView addSubview:locationBar];
-
-    // Adjust existing content view children to make room
-    for (NSView* subview in [contentView subviews]) {
-        if (subview != locationBar) {
-            NSRect frame = [subview frame];
-            frame.size.height = contentFrame.size.height - LOCATION_BAR_HEIGHT;
-            [subview setFrame:frame];
-        }
-    }
-}
-
-- (void)gnustepLocationFieldAction:(id)sender
-{
-    NSLog(@"gnustepLocationFieldAction: Enter pressed");
-    fflush(stderr);
-
-    auto location = Ladybird::ns_string_to_string([self.gnustep_location_field stringValue]);
-    NSLog(@"gnustepLocationFieldAction: navigating to: %s", location.to_byte_string().characters());
-    fflush(stderr);
-
-    [self navigateToLocation:move(location)];
-}
-#endif
 
 - (void)createNewTab:(id)sender
 {
@@ -401,10 +341,17 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
 - (NSToolbarItem*)navigate_back_toolbar_item
 {
     if (!_navigate_back_toolbar_item) {
-        auto* button = Ladybird::create_application_button([[[self tab] web_view] view].navigate_back_action());
-
         _navigate_back_toolbar_item = [[NSToolbarItem alloc] initWithItemIdentifier:TOOLBAR_NAVIGATE_BACK_IDENTIFIER];
+#if LADYBIRD_APPLE
+        auto* button = Ladybird::create_application_button([[[self tab] web_view] view].navigate_back_action());
         [_navigate_back_toolbar_item setView:button];
+#else
+        // GNUstep: Use NSToolbarItem's native image support instead of custom view
+        [_navigate_back_toolbar_item setImage:[NSImage imageNamed:@"common_ArrowLeft"]];
+        [_navigate_back_toolbar_item setLabel:@"Back"];
+        [_navigate_back_toolbar_item setTarget:self];
+        [_navigate_back_toolbar_item setAction:@selector(navigateBack:)];
+#endif
     }
 
     return _navigate_back_toolbar_item;
@@ -413,10 +360,17 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
 - (NSToolbarItem*)navigate_forward_toolbar_item
 {
     if (!_navigate_forward_toolbar_item) {
-        auto* button = Ladybird::create_application_button([[[self tab] web_view] view].navigate_forward_action());
-
         _navigate_forward_toolbar_item = [[NSToolbarItem alloc] initWithItemIdentifier:TOOLBAR_NAVIGATE_FORWARD_IDENTIFIER];
+#if LADYBIRD_APPLE
+        auto* button = Ladybird::create_application_button([[[self tab] web_view] view].navigate_forward_action());
         [_navigate_forward_toolbar_item setView:button];
+#else
+        // GNUstep: Use NSToolbarItem's native image support instead of custom view
+        [_navigate_forward_toolbar_item setImage:[NSImage imageNamed:@"common_ArrowRight"]];
+        [_navigate_forward_toolbar_item setLabel:@"Forward"];
+        [_navigate_forward_toolbar_item setTarget:self];
+        [_navigate_forward_toolbar_item setAction:@selector(navigateForward:)];
+#endif
     }
 
     return _navigate_forward_toolbar_item;
@@ -425,10 +379,21 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
 - (NSToolbarItem*)reload_toolbar_item
 {
     if (!_reload_toolbar_item) {
-        auto* button = Ladybird::create_application_button(WebView::Application::the().reload_action());
-
         _reload_toolbar_item = [[NSToolbarItem alloc] initWithItemIdentifier:TOOLBAR_RELOAD_IDENTIFIER];
+#if LADYBIRD_APPLE
+        auto* button = Ladybird::create_application_button(WebView::Application::the().reload_action());
         [_reload_toolbar_item setView:button];
+#else
+        // GNUstep: Use text button to avoid Eau theme NSButtonCell infinite recursion
+        auto* button = [[NSButton alloc] initWithFrame:NSMakeRect(0, 0, 24, 24)];
+        [button setTitle:@"\u21BB"];  // ↻ Unicode clockwise arrow
+        [button setBordered:YES];
+        [button setTarget:self];
+        [button setAction:@selector(reload:)];
+        [_reload_toolbar_item setView:button];
+        [_reload_toolbar_item setMinSize:NSMakeSize(24.0, 24.0)];
+        [_reload_toolbar_item setMaxSize:NSMakeSize(24.0, 24.0)];
+#endif
     }
 
     return _reload_toolbar_item;
@@ -437,7 +402,12 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
 - (NSToolbarItem*)location_toolbar_item
 {
     if (!_location_toolbar_item) {
+#if LADYBIRD_APPLE
         auto* location_search_field = [[LocationSearchField alloc] init];
+#else
+        // GNUstep: Use initWithFrame: with smaller width to leave room for other toolbar items
+        auto* location_search_field = [[LocationSearchField alloc] initWithFrame:NSMakeRect(0, 0, 300, 22)];
+#endif
         [location_search_field setPlaceholderString:@"Enter web address"];
         [location_search_field setTextColor:[NSColor textColor]];
         [location_search_field setDelegate:self];
@@ -448,6 +418,11 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
 
         _location_toolbar_item = [[NSToolbarItem alloc] initWithItemIdentifier:TOOLBAR_LOCATION_IDENTIFIER];
         [_location_toolbar_item setView:location_search_field];
+#if !LADYBIRD_APPLE
+        // GNUstep: Set min/max size for toolbar item with custom view (required by GNUstep)
+        [_location_toolbar_item setMinSize:NSMakeSize(100.0, 22.0)];
+        [_location_toolbar_item setMaxSize:NSMakeSize(600.0, 22.0)];
+#endif
     }
 
     return _location_toolbar_item;
@@ -456,10 +431,16 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
 - (NSToolbarItem*)zoom_toolbar_item
 {
     if (!_zoom_toolbar_item) {
-        auto* button = Ladybird::create_application_button([[[self tab] web_view] view].reset_zoom_action());
-
         _zoom_toolbar_item = [[NSToolbarItem alloc] initWithItemIdentifier:TOOLBAR_ZOOM_IDENTIFIER];
+#if LADYBIRD_APPLE
+        auto* button = Ladybird::create_application_button([[[self tab] web_view] view].reset_zoom_action());
         [_zoom_toolbar_item setView:button];
+#else
+        // GNUstep: Use label-based toolbar item
+        [_zoom_toolbar_item setLabel:@"100%"];
+        [_zoom_toolbar_item setTarget:self];
+        [_zoom_toolbar_item setAction:@selector(resetZoom:)];
+#endif
     }
 
     return _zoom_toolbar_item;
@@ -468,22 +449,23 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
 - (NSToolbarItem*)new_tab_toolbar_item
 {
     if (!_new_tab_toolbar_item) {
+        _new_tab_toolbar_item = [[NSToolbarItem alloc] initWithItemIdentifier:TOOLBAR_NEW_TAB_IDENTIFIER];
 #if LADYBIRD_APPLE
         auto* button = [self create_button:NSImageNameAddTemplate
                                with_action:@selector(createNewTab:)
                               with_tooltip:@"New tab"];
+        [_new_tab_toolbar_item setView:button];
 #else
-        // GNUstep: Use text button since NSImageNameAddTemplate not available
-        NSButton* button = [[NSButton alloc] init];
+        // GNUstep: Use text button to avoid Eau theme NSButtonCell infinite recursion
+        auto* button = [[NSButton alloc] initWithFrame:NSMakeRect(0, 0, 24, 24)];
         [button setTitle:@"+"];
+        [button setBordered:YES];
         [button setTarget:self];
         [button setAction:@selector(createNewTab:)];
-        [button setToolTip:@"New tab"];
-        [button setBordered:YES];
-#endif
-
-        _new_tab_toolbar_item = [[NSToolbarItem alloc] initWithItemIdentifier:TOOLBAR_NEW_TAB_IDENTIFIER];
         [_new_tab_toolbar_item setView:button];
+        [_new_tab_toolbar_item setMinSize:NSMakeSize(24.0, 24.0)];
+        [_new_tab_toolbar_item setMaxSize:NSMakeSize(24.0, 24.0)];
+#endif
     }
 
     return _new_tab_toolbar_item;
@@ -492,22 +474,23 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
 - (NSToolbarItem*)tab_overview_toolbar_item
 {
     if (!_tab_overview_toolbar_item) {
+        _tab_overview_toolbar_item = [[NSToolbarItem alloc] initWithItemIdentifier:TOOLBAR_TAB_OVERVIEW_IDENTIFIER];
 #if LADYBIRD_APPLE
         auto* button = [self create_button:NSImageNameIconViewTemplate
                                with_action:@selector(showTabOverview:)
                               with_tooltip:@"Show all tabs"];
+        [_tab_overview_toolbar_item setView:button];
 #else
-        // GNUstep: Use text button since NSImageNameIconViewTemplate not available
-        NSButton* button = [[NSButton alloc] init];
-        [button setTitle:@"Tabs"];
+        // GNUstep: Use text button to avoid Eau theme NSButtonCell infinite recursion
+        auto* button = [[NSButton alloc] initWithFrame:NSMakeRect(0, 0, 36, 24)];
+        [button setTitle:@"\u2630"];  // ☰ Unicode hamburger menu / trigram for heaven
+        [button setBordered:YES];
         [button setTarget:self];
         [button setAction:@selector(showTabOverview:)];
-        [button setToolTip:@"Show all tabs"];
-        [button setBordered:YES];
-#endif
-
-        _tab_overview_toolbar_item = [[NSToolbarItem alloc] initWithItemIdentifier:TOOLBAR_TAB_OVERVIEW_IDENTIFIER];
         [_tab_overview_toolbar_item setView:button];
+        [_tab_overview_toolbar_item setMinSize:NSMakeSize(36.0, 24.0)];
+        [_tab_overview_toolbar_item setMaxSize:NSMakeSize(36.0, 24.0)];
+#endif
     }
 
     return _tab_overview_toolbar_item;
@@ -529,9 +512,15 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
             TOOLBAR_TAB_OVERVIEW_IDENTIFIER,
         ];
 #else
-        // GNUstep: Use minimal toolbar to avoid hangs
+        // GNUstep: Layout without flexible spaces
+        // Left: Back, Forward, Reload | Location | Right: New Tab, Tabs
         _toolbar_identifiers = @[
+            TOOLBAR_NAVIGATE_BACK_IDENTIFIER,
+            TOOLBAR_NAVIGATE_FORWARD_IDENTIFIER,
+            TOOLBAR_RELOAD_IDENTIFIER,
             TOOLBAR_LOCATION_IDENTIFIER,
+            TOOLBAR_NEW_TAB_IDENTIFIER,
+            TOOLBAR_TAB_OVERVIEW_IDENTIFIER,
         ];
 #endif
     }
@@ -567,30 +556,27 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
 #if LADYBIRD_APPLE
     [self.window setToolbar:self.toolbar];
     [self.window setToolbarStyle:NSWindowToolbarStyleUnified];
-#else
-    // GNUstep: NSToolbar causes hangs, use a custom location bar instead
-    NSLog(@"showWindow: creating custom location bar for GNUstep");
-    fflush(stderr);
-    [self setupGNUstepLocationBar];
-    NSLog(@"showWindow: custom location bar created");
-    fflush(stderr);
-    // Update viewport rect after location bar modifies webview frame
-    [[[self tab] web_view] handleResize];
-    NSLog(@"showWindow: handleResize called after location bar setup");
-    fflush(stderr);
-#endif
-
     [self.window makeKeyAndOrderFront:sender];
-#if !LADYBIRD_APPLE
-    NSLog(@"showWindow: after makeKeyAndOrderFront, window=%p isVisible=%d", self.window, [self.window isVisible]);
+#else
+    // GNUstep: Follow FlexiSheet's pattern for toolbar setup
+    // 1. Set delegate (toolbar is already visible by default in GNUstep)
+    // 2. Attach toolbar to window
+    // 3. Then make window visible
+    [self.toolbar setDelegate:self];
+    [self.window setToolbar:self.toolbar];
+
+    NSLog(@"showWindow: toolbar attached, isVisible=%d", [self.toolbar isVisible]);
+    fflush(stderr);
+
+    // Make the window visible
+    [self.window makeKeyAndOrderFront:sender];
+
+    NSLog(@"showWindow: window visible, content frame=%@",
+          NSStringFromRect([[self.window contentView] frame]));
     fflush(stderr);
 #endif
 
     [self focusLocationToolbarItem];
-#if !LADYBIRD_APPLE
-    NSLog(@"showWindow: after focusLocationToolbarItem, window isVisible=%d", [self.window isVisible]);
-    fflush(stderr);
-#endif
 
     auto* delegate = (ApplicationDelegate*)[NSApp delegate];
     [delegate setActiveTab:[self tab]];
@@ -623,6 +609,7 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
 - (void)windowDidResize:(NSNotification*)notification
 {
 #if LADYBIRD_APPLE
+    // Auto Layout constraints - not supported on GNUstep
     if (self.location_toolbar_item_width != nil) {
         self.location_toolbar_item_width.active = NO;
     }
@@ -644,6 +631,30 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
 {
     [[[self tab] web_view] handleDisplayRefreshRateChange];
 }
+
+#if !LADYBIRD_APPLE
+#pragma mark - GNUstep Navigation Actions
+
+- (void)navigateBack:(id)sender
+{
+    [[[self tab] web_view] view].navigate_back_action().activate();
+}
+
+- (void)navigateForward:(id)sender
+{
+    [[[self tab] web_view] view].navigate_forward_action().activate();
+}
+
+- (void)reload:(id)sender
+{
+    WebView::Application::the().reload_action().activate();
+}
+
+- (void)resetZoom:(id)sender
+{
+    [[[self tab] web_view] view].reset_zoom_action().activate();
+}
+#endif
 
 #pragma mark - NSToolbarDelegate
 
@@ -761,7 +772,8 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
 #if LADYBIRD_APPLE
         return Ladybird::ns_string_to_string([[text_view textStorage] string]);
 #else
-        return Ladybird::ns_string_to_string([self.gnustep_location_field stringValue]);
+        auto* location_search_field = (LocationSearchField*)[self.location_toolbar_item view];
+        return Ladybird::ns_string_to_string([location_search_field stringValue]);
 #endif
     });
 
@@ -776,23 +788,15 @@ static NSString* const TOOLBAR_TAB_OVERVIEW_IDENTIFIER = @"ToolbarTabOverviewIde
 
 - (void)controlTextDidEndEditing:(NSNotification*)notification
 {
-#if LADYBIRD_APPLE
     auto* location_search_field = (LocationSearchField*)[self.location_toolbar_item view];
     auto url_string = Ladybird::ns_string_to_string([location_search_field stringValue]);
-#else
-    auto url_string = Ladybird::ns_string_to_string([self.gnustep_location_field stringValue]);
-#endif
     [self setLocationFieldText:url_string];
 }
 
 - (void)controlTextDidChange:(NSNotification*)notification
 {
-#if LADYBIRD_APPLE
     auto* location_search_field = (LocationSearchField*)[self.location_toolbar_item view];
     auto url_string = Ladybird::ns_string_to_string([location_search_field stringValue]);
-#else
-    auto url_string = Ladybird::ns_string_to_string([self.gnustep_location_field stringValue]);
-#endif
     m_autocomplete->query_autocomplete_engine(move(url_string));
 }
 

@@ -93,11 +93,12 @@ static constexpr CGFloat const SEARCH_PANEL_HEIGHT = 30;
 
 #if LADYBIRD_APPLE
         [self setTitleVisibility:NSWindowTitleHidden];
-#endif
         [self setIsVisible:YES];
-#if !LADYBIRD_APPLE
-        // GNUstep requires explicit makeKeyAndOrderFront
-        [self makeKeyAndOrderFront:nil];
+#else
+        // GNUstep: Don't make window visible here - TabController.showWindow: will do it
+        // AFTER setting the toolbar. This is critical because GNUstep's NSToolbar
+        // layout is calculated when setToolbar: is called, and if the window is
+        // already visible, the content view frame won't be adjusted properly.
 #endif
 
         self.search_panel = [[SearchPanel alloc] init];
