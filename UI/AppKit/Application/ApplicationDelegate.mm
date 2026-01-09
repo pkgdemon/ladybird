@@ -449,6 +449,31 @@
     auto* menu = [[NSMenuItem alloc] initWithTitle:@"Window" action:nil keyEquivalent:@""];
     auto* submenu = [[NSMenu alloc] initWithTitle:@"Window"];
 
+#if LADYBIRD_HAS_NSTABVIEW
+    // Tab switching shortcuts (Cmd+1 through Cmd+9)
+    for (int i = 1; i <= 9; i++) {
+        NSString* title = [NSString stringWithFormat:@"Select Tab %d", i];
+        NSString* keyEquiv = [NSString stringWithFormat:@"%d", i];
+        NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:title
+                                                      action:@selector(selectTabByNumber:)
+                                               keyEquivalent:keyEquiv];
+        [item setTag:i];
+        [submenu addItem:item];
+    }
+
+    [submenu addItem:[NSMenuItem separatorItem]];
+
+    // Next/Previous tab shortcuts
+    [submenu addItem:[[NSMenuItem alloc] initWithTitle:@"Select Next Tab"
+                                                action:@selector(selectNextTab:)
+                                         keyEquivalent:@"}"]];
+    [submenu addItem:[[NSMenuItem alloc] initWithTitle:@"Select Previous Tab"
+                                                action:@selector(selectPreviousTab:)
+                                         keyEquivalent:@"{"]];
+
+    [submenu addItem:[NSMenuItem separatorItem]];
+#endif
+
     [NSApp setWindowsMenu:submenu];
 
     [menu setSubmenu:submenu];

@@ -14,6 +14,14 @@
 
 @class BrowserTab;
 @class BrowserToolbar;
+@class GNUstepBrowserWindow;
+
+// Custom NSTabView with context menu support
+@interface BrowserTabView : NSTabView
+
+@property (nonatomic, weak) GNUstepBrowserWindow* browserWindow;
+
+@end
 
 @interface GNUstepBrowserWindow : NSWindow <NSTabViewDelegate, NSWindowDelegate>
 
@@ -28,7 +36,7 @@
 - (NSUInteger)tabCount;
 
 // Properties
-@property (nonatomic, strong) NSTabView* tabView;
+@property (nonatomic, strong) BrowserTabView* tabView;
 @property (nonatomic, strong) BrowserToolbar* browserToolbar;
 
 @end

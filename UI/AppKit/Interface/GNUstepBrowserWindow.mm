@@ -8,13 +8,123 @@
 
 #if LADYBIRD_HAS_NSTABVIEW
 
+#include <LibURL/Parser.h>
+#include <LibURL/URL.h>
+
 #import <Interface/GNUstepBrowserWindow.h>
 #import <Interface/BrowserTab.h>
 #import <Interface/BrowserToolbar.h>
+#import <Utilities/Conversions.h>
 
 #if !__has_feature(objc_arc)
 #    error "This project requires ARC"
 #endif
+
+#pragma mark - BrowserTabView
+
+@implementation BrowserTabView
+
+- (NSMenu*)menuForEvent:(NSEvent*)event
+{
+    // Find which tab was clicked
+    NSPoint point = [self convertPoint:[event locationInWindow] fromView:nil];
+
+    // Check if click is in the tab bar area (top portion of the view)
+    NSRect tabBarRect = [self bounds];
+    tabBarRect.size.height = 25;  // Approximate tab bar height
+    tabBarRect.origin.y = NSMaxY([self bounds]) - 25;
+
+    if (!NSPointInRect(point, tabBarRect)) {
+        return nil;  // Not in tab bar area
+    }
+
+    // Use tabViewItemAtPoint to find the clicked tab
+    BrowserTab* clickedTab = (BrowserTab*)[self tabViewItemAtPoint:point];
+
+    if (!clickedTab) {
+        clickedTab = (BrowserTab*)[self selectedTabViewItem];
+    }
+
+    if (!clickedTab) {
+        return nil;
+    }
+
+    // Create context menu
+    NSMenu* menu = [[NSMenu alloc] initWithTitle:@"Tab"];
+
+    NSMenuItem* closeItem = [[NSMenuItem alloc] initWithTitle:@"Close Tab"
+                                                       action:@selector(closeTabFromMenu:)
+                                                keyEquivalent:@""];
+    [closeItem setTarget:self];
+    [closeItem setRepresentedObject:clickedTab];
+    [menu addItem:closeItem];
+
+    NSMenuItem* closeOthersItem = [[NSMenuItem alloc] initWithTitle:@"Close Other Tabs"
+                                                             action:@selector(closeOtherTabsFromMenu:)
+                                                      keyEquivalent:@""];
+    [closeOthersItem setTarget:self];
+    [closeOthersItem setRepresentedObject:clickedTab];
+    [menu addItem:closeOthersItem];
+
+    [menu addItem:[NSMenuItem separatorItem]];
+
+    NSMenuItem* duplicateItem = [[NSMenuItem alloc] initWithTitle:@"Duplicate Tab"
+                                                           action:@selector(duplicateTabFromMenu:)
+                                                    keyEquivalent:@""];
+    [duplicateItem setTarget:self];
+    [duplicateItem setRepresentedObject:clickedTab];
+    [menu addItem:duplicateItem];
+
+    return menu;
+}
+
+- (void)closeTabFromMenu:(NSMenuItem*)sender
+{
+    BrowserTab* tab = [sender representedObject];
+    if (tab && self.browserWindow) {
+        [self.browserWindow closeTab:tab];
+    }
+}
+
+- (void)closeOtherTabsFromMenu:(NSMenuItem*)sender
+{
+    BrowserTab* keepTab = [sender representedObject];
+    if (!keepTab || !self.browserWindow) {
+        return;
+    }
+
+    // Get all tabs except the one to keep
+    NSArray* allTabs = [[self tabViewItems] copy];
+    for (BrowserTab* tab in allTabs) {
+        if (tab != keepTab) {
+            [self.browserWindow closeTab:tab];
+        }
+    }
+}
+
+- (void)duplicateTabFromMenu:(NSMenuItem*)sender
+{
+    BrowserTab* tab = [sender representedObject];
+    if (!tab || !self.browserWindow) {
+        return;
+    }
+
+    // Create new tab with same URL
+    BrowserTab* newTab = [self.browserWindow createNewTab];
+    NSString* urlString = [tab currentURLString];
+    if (urlString && [urlString length] > 0) {
+        // Parse and load the URL
+        auto url_string = Ladybird::ns_string_to_string(urlString);
+        auto url = URL::Parser::basic_parse(url_string);
+        if (url.has_value()) {
+            [newTab loadURL:url.value()];
+        }
+    }
+}
+
+@end
+
+#pragma mark - GNUstepBrowserWindow
 
 @interface GNUstepBrowserWindow ()
 @end
@@ -55,7 +165,8 @@
         NSLog(@"GNUstepBrowserWindow: creating tab view");
         fflush(stderr);
         NSRect contentRect = [[self contentView] bounds];
-        self.tabView = [[NSTabView alloc] initWithFrame:contentRect];
+        self.tabView = [[BrowserTabView alloc] initWithFrame:contentRect];
+        [self.tabView setBrowserWindow:self];
         [self.tabView setTabViewType:NSTopTabsBezelBorder];
         [self.tabView setDelegate:self];
         [self.tabView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
@@ -154,6 +265,26 @@
 - (void)openLocation:(id)sender
 {
     [self.browserToolbar focusLocationField];
+}
+
+- (void)selectTabByNumber:(id)sender
+{
+    NSInteger tabNumber = [sender tag];  // 1-based
+    NSInteger tabIndex = tabNumber - 1;  // 0-based
+
+    if (tabIndex >= 0 && tabIndex < [self.tabView numberOfTabViewItems]) {
+        [self.tabView selectTabViewItemAtIndex:tabIndex];
+    }
+}
+
+- (void)selectNextTab:(id)sender
+{
+    [self.tabView selectNextTabViewItem:sender];
+}
+
+- (void)selectPreviousTab:(id)sender
+{
+    [self.tabView selectPreviousTabViewItem:sender];
 }
 
 #pragma mark - NSTabViewDelegate
