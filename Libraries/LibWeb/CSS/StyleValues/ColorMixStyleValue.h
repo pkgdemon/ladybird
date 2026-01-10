@@ -27,21 +27,21 @@ public:
         bool operator==(ColorMixComponent const&) const = default;
     };
 
-    static ValueComparingNonnullRefPtr<ColorMixStyleValue const> create(ColorInterpolationMethod, ColorMixComponent first_component, ColorMixComponent second_component);
+    static ValueComparingNonnullRefPtr<ColorMixStyleValue const> create(Optional<ColorInterpolationMethod>, ColorMixComponent first_component, ColorMixComponent second_component);
 
     virtual bool equals(StyleValue const&) const override;
     virtual Optional<Color> to_color(ColorResolutionContext) const override;
-    virtual String to_string(SerializationMode) const override;
+    virtual void serialize(StringBuilder&, SerializationMode) const override;
 
 private:
     struct Properties {
-        ColorInterpolationMethod color_interpolation_method;
+        Optional<ColorInterpolationMethod> color_interpolation_method;
         ColorMixComponent first_component;
         ColorMixComponent second_component;
         bool operator==(Properties const&) const = default;
     };
 
-    ColorMixStyleValue(ColorInterpolationMethod, ColorMixComponent first_component, ColorMixComponent second_component);
+    ColorMixStyleValue(Optional<ColorInterpolationMethod>, ColorMixComponent first_component, ColorMixComponent second_component);
 
     struct PercentageNormalizationResult {
         Percentage p1;

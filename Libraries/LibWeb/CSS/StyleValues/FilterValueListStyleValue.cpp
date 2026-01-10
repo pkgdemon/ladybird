@@ -43,31 +43,34 @@ float FilterOperation::Color::resolved_amount() const
     VERIFY_NOT_REACHED();
 }
 
-String FilterValueListStyleValue::to_string(SerializationMode mode) const
+void FilterValueListStyleValue::serialize(StringBuilder& builder, SerializationMode mode) const
 {
-    StringBuilder builder {};
     bool first = true;
     for (auto& filter_function : filter_value_list()) {
         if (!first)
             builder.append(' ');
         filter_function.visit(
             [&](FilterOperation::Blur const& blur) {
-                builder.appendff("blur({}", blur.radius.to_string(mode));
+                builder.append("blur("sv);
+                blur.radius.serialize(builder, mode);
             },
             [&](FilterOperation::DropShadow const& drop_shadow) {
                 builder.append("drop-shadow("sv);
                 if (drop_shadow.color) {
-                    builder.appendff("{} ", drop_shadow.color->to_string(mode));
+                    drop_shadow.color->serialize(builder, mode);
+                    builder.append(' ');
                 }
                 builder.appendff("{} {}", drop_shadow.offset_x, drop_shadow.offset_y);
-                if (drop_shadow.radius.has_value())
-                    builder.appendff(" {}", drop_shadow.radius->to_string(mode));
+                if (drop_shadow.radius.has_value()) {
+                    builder.append(' ');
+                    drop_shadow.radius->serialize(builder, mode);
+                }
             },
             [&](FilterOperation::HueRotate const& hue_rotate) {
                 builder.append("hue-rotate("sv);
                 hue_rotate.angle.visit(
                     [&](AngleOrCalculated const& angle) {
-                        builder.append(angle.to_string(mode));
+                        angle.serialize(builder, mode);
                     },
                     [&](FilterOperation::HueRotate::Zero const&) {
                         builder.append("0deg"sv);
@@ -96,7 +99,7 @@ String FilterValueListStyleValue::to_string(SerializationMode mode) const
                         }
                     }());
 
-                builder.append(color.amount.to_string(mode));
+                color.amount.serialize(builder, mode);
             },
             [&](CSS::URL const& url) {
                 builder.append(url.to_string());
@@ -104,7 +107,6 @@ String FilterValueListStyleValue::to_string(SerializationMode mode) const
         builder.append(')');
         first = false;
     }
-    return MUST(builder.to_string());
 }
 
 bool FilterValueListStyleValue::contains_url() const

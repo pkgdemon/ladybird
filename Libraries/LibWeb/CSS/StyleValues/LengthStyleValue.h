@@ -24,7 +24,7 @@ public:
     virtual double raw_value() const override { return m_length.raw_value(); }
     virtual FlyString unit_name() const override { return m_length.unit_name(); }
 
-    virtual String to_string(SerializationMode serialization_mode) const override { return m_length.to_string(serialization_mode); }
+    virtual void serialize(StringBuilder& builder, SerializationMode mode) const override { m_length.serialize(builder, mode); }
     virtual ValueComparingNonnullRefPtr<StyleValue const> absolutized(ComputationContext const&) const override;
 
     bool equals(StyleValue const& other) const override;

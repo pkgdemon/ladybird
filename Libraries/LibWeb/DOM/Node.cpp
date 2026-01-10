@@ -1775,6 +1775,13 @@ Element* Node::parent_or_shadow_host_element()
     return nullptr;
 }
 
+Node const* Node::parent_or_shadow_host_node() const
+{
+    if (is<ShadowRoot>(*this))
+        return static_cast<ShadowRoot const&>(*this).host();
+    return parent();
+}
+
 Slottable Node::as_slottable()
 {
     VERIFY(is_slottable());
@@ -2215,7 +2222,7 @@ bool Node::is_equal_node(Node const* other_node) const
             || this_element.local_name() != other_element.local_name()
             || this_element.attribute_list_size() != other_element.attribute_list_size())
             return false;
-        // If A is an element, each attribute in its attribute list has an attribute that equals an attribute in B’s attribute list.
+        // If A is an element, each attribute in its attribute list equals an attribute in B’s attribute list.
         bool has_same_attributes = true;
         this_element.for_each_attribute([&](auto const& attribute) {
             if (other_element.get_attribute_ns(attribute.namespace_uri(), attribute.local_name()) != attribute.value())

@@ -42,6 +42,16 @@ void CSSPropertyRule::initialize(JS::Realm& realm)
     Base::initialize(realm);
 }
 
+CustomPropertyRegistration CSSPropertyRule::to_registration() const
+{
+    return CustomPropertyRegistration {
+        .property_name = m_name,
+        .syntax = m_syntax.to_string(),
+        .inherit = m_inherits,
+        .initial_value = m_initial_value,
+    };
+}
+
 // https://www.w3.org/TR/cssom-1/#serialize-a-css-rule
 String CSSPropertyRule::serialized() const
 {
@@ -70,11 +80,13 @@ String CSSPropertyRule::serialized() const
     builder.appendff("inherits: {}; ", inherits());
 
     // 8. If the rule’s initial-value is present, follow these substeps:
-    if (initial_value().has_value()) {
+    if (m_initial_value) {
         // 1. The string "initial-value:".
         // 2. The result of performing serialize a CSS value in the rule’s initial-value followed by a single SEMICOLON
         //    (U+003B), followed by a SPACE (U+0020).
-        builder.appendff("initial-value: {}; ", initial_value());
+        builder.append("initial-value: "sv);
+        m_initial_value->serialize(builder, SerializationMode::Normal);
+        builder.append("; "sv);
     }
     // 9. A single RIGHT CURLY BRACKET (U+007D).
     builder.append("}"sv);
@@ -95,9 +107,11 @@ void CSSPropertyRule::dump(StringBuilder& builder, int indent_levels) const
     dump_indent(builder, indent_levels + 1);
     builder.appendff("Inherits: {}\n", inherits());
 
-    if (initial_value().has_value()) {
+    if (m_initial_value) {
         dump_indent(builder, indent_levels + 1);
-        builder.appendff("Initial value: {}\n", initial_value().value());
+        builder.append("Initial value: "sv);
+        m_initial_value->serialize(builder, SerializationMode::Normal);
+        builder.append('\n');
     }
 }
 

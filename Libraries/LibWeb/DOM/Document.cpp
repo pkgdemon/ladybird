@@ -2,7 +2,7 @@
  * Copyright (c) 2018-2025, Andreas Kling <andreas@ladybird.org>
  * Copyright (c) 2021-2023, Linus Groh <linusg@serenityos.org>
  * Copyright (c) 2021-2025, Luke Wilde <luke@ladybird.org>
- * Copyright (c) 2021-2024, Sam Atkins <sam@ladybird.org>
+ * Copyright (c) 2021-2026, Sam Atkins <sam@ladybird.org>
  * Copyright (c) 2024, Matthew Olsson <mattco@serenityos.org>
  * Copyright (c) 2025, Jelle Raaijmakers <jelle@ladybird.org>
  *
@@ -641,7 +641,6 @@ void Document::visit_edges(Cell::Visitor& visitor)
     visitor.visit(m_render_blocking_elements);
     visitor.visit(m_policy_container);
     visitor.visit(m_style_invalidator);
-    visitor.visit(m_registered_custom_properties);
 }
 
 // https://w3c.github.io/selection-api/#dom-document-getselection
@@ -1611,6 +1610,8 @@ void Document::update_style()
     style_computer().reset_has_result_cache();
     style_computer().reset_ancestor_filter();
 
+    build_registered_properties_cache();
+
     auto invalidation = update_style_recursively(*this, style_computer(), false, false);
     if (!invalidation.is_none())
         invalidate_display_list();
@@ -2502,11 +2503,13 @@ void Document::set_focused_area(GC::Ptr<Node> node)
 
     // Scroll the viewport if necessary to make the newly focused element visible.
     if (new_focused_element) {
-        new_focused_element->queue_an_element_task(HTML::Task::Source::UserInteraction, [&] {
+        new_focused_element->queue_an_element_task(HTML::Task::Source::UserInteraction, [new_focused_element] {
+            if (new_focused_element->document().focused_area().ptr() != new_focused_element)
+                return;
             ScrollIntoViewOptions scroll_options;
             scroll_options.block = Bindings::ScrollLogicalPosition::Nearest;
             scroll_options.inline_ = Bindings::ScrollLogicalPosition::Nearest;
-            (void)as<Element>(*m_focused_area).scroll_into_view(scroll_options);
+            (void)new_focused_element->scroll_into_view(scroll_options);
         });
     }
 
@@ -6441,18 +6444,20 @@ WebIDL::ExceptionOr<GC::Root<DOM::Document>> Document::parse_html_unsafe(JS::VM&
     return document;
 }
 
-InputEventsTarget* Document::active_input_events_target()
+InputEventsTarget* Document::active_input_events_target(Node const* for_node)
 {
     auto focused_area = this->focused_area();
     if (!focused_area)
-        return {};
+        return nullptr;
 
-    if (auto* input_element = as_if<HTML::HTMLInputElement>(*focused_area))
-        return input_element;
-    if (auto* text_area_element = as_if<HTML::HTMLTextAreaElement>(*focused_area))
-        return text_area_element;
-    if (focused_area->is_editable_or_editing_host())
-        return m_editing_host_manager;
+    if (focused_area->is_editable_or_editing_host()) {
+        if (!for_node || m_editing_host_manager->is_within_active_contenteditable(*for_node))
+            return m_editing_host_manager;
+    }
+    if (auto* form_text_element = as_if<HTML::FormAssociatedTextControlElement>(*focused_area)) {
+        if (!for_node || for_node->find_in_shadow_including_ancestry([&](Node const& it) { return &it == focused_area; }))
+            return form_text_element;
+    }
     return nullptr;
 }
 
@@ -6890,9 +6895,9 @@ Optional<Vector<CSS::Parser::ComponentValue>> Document::environment_variable_val
     VERIFY_NOT_REACHED();
 }
 
-HashMap<FlyString, GC::Ref<Web::CSS::CSSPropertyRule>>& Document::registered_custom_properties()
+HashMap<FlyString, CSS::CustomPropertyRegistration>& Document::registered_property_set()
 {
-    return m_registered_custom_properties;
+    return m_registered_property_set;
 }
 
 WebIDL::ExceptionOr<GC::Ref<XPath::XPathExpression>> Document::create_expression(String const& expression, GC::Ptr<XPath::XPathNSResolver> resolver)
@@ -6912,19 +6917,46 @@ GC::Ref<DOM::Node> Document::create_ns_resolver(GC::Ref<DOM::Node> node_resolver
     return node_resolver;
 }
 
+// https://drafts.css-houdini.org/css-properties-values-api/#determining-registration
+Optional<CSS::CustomPropertyRegistration const&> Document::get_registered_custom_property(FlyString const& name) const
+{
+    // If the Document’s [[registeredPropertySet]] slot contains a record with the custom property’s name, the
+    // registration is that record.
+    if (auto registered_property = m_registered_property_set.get(name); registered_property.has_value())
+        return registered_property;
+
+    // Otherwise, if the Document’s active stylesheets contain at least one valid @property rule representing a
+    // registration with the custom property’s name, the last such one in document order is the registration.
+    if (auto registered_property = m_cached_registered_properties_from_css_property_rules.get(name); registered_property.has_value())
+        return registered_property;
+
+    // Otherwise there is no registration, and the custom property is not a registered custom property.
+    return {};
+}
+
 NonnullRefPtr<CSS::StyleValue const> Document::custom_property_initial_value(FlyString const& name) const
 {
-    auto maybe_custom_property = m_registered_custom_properties.get(name);
+    auto maybe_custom_property = get_registered_custom_property(name);
     if (maybe_custom_property.has_value()) {
-        auto parsed_value = maybe_custom_property.value()->initial_style_value();
-        if (!parsed_value)
-            return CSS::GuaranteedInvalidStyleValue::create();
-        return parsed_value.release_nonnull();
+        if (maybe_custom_property->initial_value)
+            return *maybe_custom_property->initial_value;
+        return CSS::GuaranteedInvalidStyleValue::create();
     }
 
     // For non-registered properties, the initial value is the guaranteed-invalid value.
     // See: https://drafts.csswg.org/css-variables/#propdef-
     return CSS::GuaranteedInvalidStyleValue::create();
+}
+
+void Document::build_registered_properties_cache()
+{
+    m_cached_registered_properties_from_css_property_rules.clear_with_capacity();
+    for_each_active_css_style_sheet([&](CSS::CSSStyleSheet const& style_sheet) {
+        style_sheet.for_each_effective_rule(TraversalOrder::Preorder, [&](CSS::CSSRule const& rule) {
+            if (auto* property_rule = as_if<CSS::CSSPropertyRule>(rule))
+                m_cached_registered_properties_from_css_property_rules.set(property_rule->name(), property_rule->to_registration());
+        });
+    });
 }
 
 GC::Ptr<Element> ElementByIdMap::get(FlyString const& element_id) const
