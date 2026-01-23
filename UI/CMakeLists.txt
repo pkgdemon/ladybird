@@ -53,6 +53,8 @@ elseif (APPLE)
    add_subdirectory(AppKit)
 elseif(ANDROID)
    add_subdirectory(Android)
+elseif(LADYBIRD_USE_GNUSTEP)
+   add_subdirectory(GNUstep)
 else()
     # TODO: Check for other GUI frameworks here when we move them in-tree
     return()
