@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2021-2023, Linus Groh <linusg@serenityos.org>
- * Copyright (c) 2024-2025, Tim Flynn <trflynn89@ladybird.org>
+ * Copyright (c) 2024-2026, Tim Flynn <trflynn89@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -143,11 +143,9 @@ JS_DEFINE_NATIVE_FUNCTION(InstantPrototype::round)
     // 2. Perform ? RequireInternalSlot(instant, [[InitializedTemporalInstant]]).
     auto instant = TRY(typed_this_object(vm));
 
-    // 3. If roundTo is undefined, then
-    if (round_to_value.is_undefined()) {
-        // a. Throw a TypeError exception.
+    // 3. If roundTo is undefined, throw a TypeError exception.
+    if (round_to_value.is_undefined())
         return vm.throw_completion<TypeError>(ErrorType::TemporalMissingOptionsObject);
-    }
 
     GC::Ptr<Object> round_to;
 
@@ -302,7 +300,7 @@ JS_DEFINE_NATIVE_FUNCTION(InstantPrototype::to_string)
 }
 
 // 8.3.12 Temporal.Instant.prototype.toLocaleString ( [ locales [ , options ] ] ), https://tc39.es/proposal-temporal/#sec-temporal.instant.prototype.tolocalestring
-// 15.12.2.1 Temporal.Instant.prototype.toLocaleString ( [ locales [ , options ] ] ), https://tc39.es/proposal-temporal/#sup-temporal.instant.prototype.tolocalestring
+// 15.11.2.1 Temporal.Instant.prototype.toLocaleString ( [ locales [ , options ] ] ), https://tc39.es/proposal-temporal/#sup-temporal.instant.prototype.tolocalestring
 JS_DEFINE_NATIVE_FUNCTION(InstantPrototype::to_locale_string)
 {
     auto& realm = *vm.current_realm();

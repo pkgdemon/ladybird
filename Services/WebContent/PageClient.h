@@ -58,7 +58,7 @@ public:
         m_all_screen_rects = rects;
         m_main_screen_index = main_screen_index;
     }
-    void set_device_pixel_ratio(double device_pixel_ratio) { m_device_pixel_ratio = device_pixel_ratio; }
+    void set_device_pixel_ratio(double device_pixel_ratio);
     void set_zoom_level(double zoom_level) { m_zoom_level = zoom_level; }
     void set_maximum_frames_per_second(u64 maximum_frames_per_second);
     void set_preferred_color_scheme(Web::CSS::PreferredColorScheme);
@@ -152,12 +152,16 @@ private:
     virtual void page_did_request_accept_dialog() override;
     virtual void page_did_request_dismiss_dialog() override;
     virtual void page_did_change_favicon(Gfx::Bitmap const&) override;
-    virtual Vector<Web::Cookie::Cookie> page_did_request_all_cookies_webdriver(URL::URL const&) override;
-    virtual Vector<Web::Cookie::Cookie> page_did_request_all_cookies_cookiestore(URL::URL const&) override;
-    virtual Optional<Web::Cookie::Cookie> page_did_request_named_cookie(URL::URL const&, String const&) override;
-    virtual String page_did_request_cookie(URL::URL const&, Web::Cookie::Source) override;
-    virtual void page_did_set_cookie(URL::URL const&, Web::Cookie::ParsedCookie const&, Web::Cookie::Source) override;
-    virtual void page_did_update_cookie(Web::Cookie::Cookie const&) override;
+    virtual Optional<Core::SharedVersion> page_did_request_document_cookie_version(Core::SharedVersionIndex document_index) override;
+    virtual void page_did_receive_document_cookie_version_buffer(Core::AnonymousBuffer document_cookie_version_buffer) override;
+    virtual void page_did_request_document_cookie_version_index(Web::UniqueNodeID document_id, String const& domain) override;
+    virtual void page_did_receive_document_cookie_version_index(Web::UniqueNodeID document_id, Core::SharedVersionIndex document_index) override;
+    virtual Vector<HTTP::Cookie::Cookie> page_did_request_all_cookies_webdriver(URL::URL const&) override;
+    virtual Vector<HTTP::Cookie::Cookie> page_did_request_all_cookies_cookiestore(URL::URL const&) override;
+    virtual Optional<HTTP::Cookie::Cookie> page_did_request_named_cookie(URL::URL const&, String const&) override;
+    virtual HTTP::Cookie::VersionedCookie page_did_request_cookie(URL::URL const&, HTTP::Cookie::Source) override;
+    virtual void page_did_set_cookie(URL::URL const&, HTTP::Cookie::ParsedCookie const&, HTTP::Cookie::Source) override;
+    virtual void page_did_update_cookie(HTTP::Cookie::Cookie const&) override;
     virtual void page_did_expire_cookies_with_time_offset(AK::Duration) override;
     virtual Optional<String> page_did_request_storage_item(Web::StorageAPI::StorageEndpointType storage_endpoint, String const& storage_key, String const& bottle_key) override;
     virtual WebView::StorageSetResult page_did_set_storage_item(Web::StorageAPI::StorageEndpointType storage_endpoint, String const& storage_key, String const& bottle_key, String const& value) override;
@@ -178,6 +182,7 @@ private:
     virtual void page_did_receive_reference_test_metadata(JsonValue) override;
     virtual void page_did_receive_test_variant_metadata(JsonValue) override;
     virtual void page_did_set_browser_zoom(double factor) override;
+    virtual void page_did_set_device_pixel_ratio_for_testing(double ratio) override;
     virtual void page_did_change_theme_color(Gfx::Color color) override;
     virtual void page_did_insert_clipboard_entry(Web::Clipboard::SystemClipboardRepresentation const&, StringView presentation_style) override;
     virtual void page_did_request_clipboard_entries(u64 request_id) override;
@@ -211,12 +216,12 @@ private:
     Web::CSS::PreferredContrast m_preferred_contrast { Web::CSS::PreferredContrast::NoPreference };
     Web::CSS::PreferredMotion m_preferred_motion { Web::CSS::PreferredMotion::NoPreference };
 
+    Core::AnonymousBuffer m_document_cookie_version_buffer;
+
     RefPtr<WebDriverConnection> m_webdriver;
     RefPtr<WebUIConnection> m_web_ui;
 
-    WeakPtr<WebContentConsoleClient> m_top_level_document_console_client;
-
-    GC::Root<JS::GlobalObject> m_console_global_object;
+    GC::Ptr<WebContentConsoleClient> m_top_level_document_console_client;
 
     RefPtr<Core::Timer> m_paint_refresh_timer;
 

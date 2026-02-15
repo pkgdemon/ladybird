@@ -306,10 +306,17 @@ GC::Ptr<NodeWithStyle> TreeBuilder::create_pseudo_element_if_needed(DOM::Element
     //        See: https://github.com/LadybirdBrowser/ladybird/issues/4782
     if (pseudo_element == CSS::PseudoElement::Marker && pseudo_element_content.type == CSS::ContentData::Type::Normal)
         if (auto* list_box = as_if<ListItemBox>(*element.layout_node())) {
+            // https://www.w3.org/TR/css-lists-3/#content-property
+            // "::marker does not generate a box" when list-style-type is 'none' and there's no marker image. Custom
+            // ::marker content is already excluded by the outer condition checking for Type::Normal.
+            auto const& list_style_type = list_box->computed_values().list_style_type();
+            if (list_style_type.has<Empty>() && !list_box->list_style_image()) {
+                return {};
+            }
 
             auto list_item_marker = document.heap().allocate<ListItemMarkerBox>(
                 document,
-                list_box->computed_values().list_style_type(),
+                list_style_type,
                 list_box->computed_values().list_style_position(),
                 element,
                 *pseudo_element_style);
@@ -1124,7 +1131,7 @@ void TreeBuilder::generate_missing_child_wrappers(NodeWithStyle& root)
 Vector<GC::Root<Box>> TreeBuilder::generate_missing_parents(NodeWithStyle& root)
 {
     Vector<GC::Root<Box>> table_roots_to_wrap;
-    root.for_each_in_inclusive_subtree_of_type<Box>([&](auto& parent) {
+    root.for_each_in_inclusive_subtree_of_type<NodeWithStyle>([&](auto& parent) {
         // 1. An anonymous table-row box must be generated around each sequence of consecutive table-cell boxes whose
         //    parent is not a table-row.
         if (is_not_table_row(parent)) {
@@ -1164,13 +1171,14 @@ Vector<GC::Root<Box>> TreeBuilder::generate_missing_parents(NodeWithStyle& root)
         }
 
         // 3. An anonymous table-wrapper box must be generated around each table-root.
-        if (parent.display().is_table_inside()) {
-            if (parent.has_been_wrapped_in_table_wrapper()) {
+        if (auto* box = as_if<Box>(parent); box && box->display().is_table_inside()) {
+            if (box->has_been_wrapped_in_table_wrapper()) {
                 VERIFY(parent.parent());
                 VERIFY(parent.parent()->is_table_wrapper());
                 return TraversalDecision::Continue;
             }
-            table_roots_to_wrap.append(parent);
+
+            table_roots_to_wrap.append(*box);
         }
 
         return TraversalDecision::Continue;

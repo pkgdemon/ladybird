@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024-2025, Aliaksandr Kalenik <kalenik.aliaksandr@gmail.com>
+ * Copyright (c) 2024-2026, Aliaksandr Kalenik <kalenik.aliaksandr@gmail.com>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -40,14 +40,12 @@ struct DrawGlyphRun {
     static constexpr StringView command_name = "DrawGlyphRun"sv;
 
     NonnullRefPtr<Gfx::GlyphRun const> glyph_run;
-    double scale { 1 };
     Gfx::IntRect rect;
     Gfx::FloatPoint translation;
     Color color;
     Gfx::Orientation orientation { Gfx::Orientation::Horizontal };
-    Gfx::IntRect bounding_rectangle;
 
-    [[nodiscard]] Gfx::IntRect bounding_rect() const { return bounding_rectangle; }
+    [[nodiscard]] Gfx::IntRect bounding_rect() const;
     void dump(StringBuilder&) const;
 };
 
@@ -175,7 +173,6 @@ struct PaintTextShadow {
     static constexpr StringView command_name = "PaintTextShadow"sv;
 
     NonnullRefPtr<Gfx::GlyphRun const> glyph_run;
-    double glyph_run_scale { 1 };
     Gfx::IntRect shadow_bounding_rect;
     Gfx::IntRect text_rect;
     Gfx::FloatPoint draw_location;
@@ -336,6 +333,7 @@ struct AddMask {
 
     RefPtr<DisplayList> display_list;
     Gfx::IntRect rect;
+    Gfx::MaskKind kind;
 
     [[nodiscard]] Gfx::IntRect bounding_rect() const { return rect; }
     bool is_clip_or_mask() const { return true; }
@@ -379,26 +377,6 @@ struct ApplyEffects {
     void dump(StringBuilder&) const;
 };
 
-struct ApplyTransform {
-    static constexpr StringView command_name = "ApplyTransform"sv;
-
-    Gfx::FloatPoint origin;
-    Gfx::FloatMatrix4x4 matrix;
-
-    void dump(StringBuilder&) const;
-};
-
-struct ApplyMaskBitmap {
-    static constexpr StringView command_name = "ApplyMaskBitmap"sv;
-
-    Gfx::IntPoint origin;
-    NonnullRefPtr<Gfx::ImmutableBitmap const> bitmap;
-    Gfx::MaskKind kind;
-
-    [[nodiscard]] Gfx::IntRect bounding_rect() const { return { origin, bitmap->size() }; }
-    void dump(StringBuilder&) const;
-};
-
 using DisplayListCommand = Variant<
     DrawGlyphRun,
     FillRect,
@@ -428,8 +406,6 @@ using DisplayListCommand = Variant<
     AddMask,
     PaintNestedDisplayList,
     PaintScrollBar,
-    ApplyEffects,
-    ApplyTransform,
-    ApplyMaskBitmap>;
+    ApplyEffects>;
 
 }

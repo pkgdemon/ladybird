@@ -14,6 +14,7 @@
 #include <LibJS/Runtime/GlobalEnvironment.h>
 #include <LibJS/Runtime/ModuleEnvironment.h>
 #include <LibJS/Runtime/PromiseCapability.h>
+#include <LibJS/Runtime/SharedFunctionInstanceData.h>
 #include <LibJS/SourceTextModule.h>
 
 namespace JS {
@@ -107,7 +108,7 @@ static Vector<ModuleRequest> module_requests(Program& program)
 SourceTextModule::SourceTextModule(Realm& realm, StringView filename, Script::HostDefined* host_defined, bool has_top_level_await, NonnullRefPtr<Program> body, Vector<ModuleRequest> requested_modules,
     Vector<ImportEntry> import_entries, Vector<ExportEntry> local_export_entries,
     Vector<ExportEntry> indirect_export_entries, Vector<ExportEntry> star_export_entries,
-    RefPtr<ExportStatement const> default_export)
+    Optional<Utf16FlyString> default_export_binding_name)
     : CyclicModule(realm, filename, has_top_level_await, move(requested_modules), host_defined)
     , m_ecmascript_code(move(body))
     , m_execution_context(ExecutionContext::create(0, 0, 0))
@@ -115,8 +116,52 @@ SourceTextModule::SourceTextModule(Realm& realm, StringView filename, Script::Ho
     , m_local_export_entries(move(local_export_entries))
     , m_indirect_export_entries(move(indirect_export_entries))
     , m_star_export_entries(move(star_export_entries))
-    , m_default_export(move(default_export))
+    , m_default_export_binding_name(move(default_export_binding_name))
 {
+    auto& vm = realm.vm();
+
+    // Pre-compute var declared names (initialize_environment step 21).
+    MUST(m_ecmascript_code->for_each_var_declared_identifier([&](Identifier const& identifier) -> ThrowCompletionOr<void> {
+        m_var_declared_names.append(identifier.string());
+        return {};
+    }));
+
+    // Pre-compute lexical bindings and functions to initialize (initialize_environment step 24).
+    MUST(m_ecmascript_code->for_each_lexically_scoped_declaration([&](Declaration const& declaration) {
+        return declaration.for_each_bound_identifier([&](Identifier const& identifier) -> ThrowCompletionOr<void> {
+            LexicalBinding binding;
+            binding.name = identifier.string();
+            binding.is_constant = declaration.is_constant_declaration();
+
+            if (declaration.is_function_declaration()) {
+                VERIFY(is<FunctionDeclaration>(declaration));
+                auto const& function_declaration = static_cast<FunctionDeclaration const&>(declaration);
+                auto shared_data = SharedFunctionInstanceData::create_for_function_node(vm, function_declaration);
+                if (function_declaration.name() == ExportStatement::local_name_for_default)
+                    shared_data->m_name = "default"_utf16_fly_string;
+                binding.function_index = static_cast<i32>(m_functions_to_initialize.size());
+                m_functions_to_initialize.append({ *shared_data, shared_data->m_name });
+            }
+
+            m_lexical_bindings.append(move(binding));
+            return {};
+        });
+    }));
+
+    // For TLA modules, pre-create the SharedFunctionInstanceData for the
+    // async wrapper function so that execute_module() doesn't need the AST.
+    if (has_top_level_await) {
+        FunctionParsingInsights parsing_insights;
+        parsing_insights.uses_this_from_environment = true;
+        parsing_insights.uses_this = true;
+        m_tla_shared_data = vm.heap().allocate<SharedFunctionInstanceData>(
+            vm, FunctionKind::Async,
+            "module code with top-level await"_utf16_fly_string,
+            0, FunctionParameters::empty(), *m_ecmascript_code,
+            Utf16View {}, true, false, parsing_insights, Vector<LocalVariable> {});
+        m_tla_shared_data->m_is_module_wrapper = true;
+        m_ecmascript_code = nullptr;
+    }
 }
 
 SourceTextModule::~SourceTextModule() = default;
@@ -126,6 +171,10 @@ void SourceTextModule::visit_edges(Cell::Visitor& visitor)
     Base::visit_edges(visitor);
     visitor.visit(m_import_meta);
     m_execution_context->visit_edges(visitor);
+    for (auto const& function : m_functions_to_initialize)
+        visitor.visit(function.shared_data);
+    visitor.visit(m_executable);
+    visitor.visit(m_tla_shared_data);
 }
 
 // 16.2.1.7.1 ParseModule ( sourceText, realm, hostDefined ), https://tc39.es/ecma262/#sec-parsemodule
@@ -161,13 +210,13 @@ Result<GC::Ref<SourceTextModule>, Vector<ParserError>> SourceTextModule::parse(S
     Vector<ExportEntry> star_export_entries;
 
     // NOTE: Not in the spec but makes it easier to find the default.
-    RefPtr<ExportStatement const> default_export;
+    Optional<Utf16FlyString> default_export_binding_name;
 
     // 9. Let exportEntries be ExportEntries of body.
     // 10. For each ExportEntry Record ee of exportEntries, do
     for (auto const& export_statement : body->exports()) {
         if (export_statement->is_default_export()) {
-            VERIFY(!default_export);
+            VERIFY(!default_export_binding_name.has_value());
             VERIFY(export_statement->entries().size() == 1);
             VERIFY(export_statement->has_statement());
 
@@ -179,7 +228,10 @@ Result<GC::Ref<SourceTextModule>, Vector<ParserError>> SourceTextModule::parse(S
                                          return import_entry.local_name == entry.local_or_import_name;
                                      })
                     .is_end());
-            default_export = export_statement;
+
+            // Extract the binding name if the default export is a non-declaration statement.
+            if (!is<Declaration>(export_statement->statement()))
+                default_export_binding_name = entry.local_or_import_name.value();
         }
 
         for (auto const& export_entry : export_statement->entries()) {
@@ -258,7 +310,7 @@ Result<GC::Ref<SourceTextModule>, Vector<ParserError>> SourceTextModule::parse(S
         move(local_export_entries),
         move(indirect_export_entries),
         move(star_export_entries),
-        move(default_export));
+        move(default_export_binding_name));
 }
 
 // 16.2.1.7.2.1 GetExportedNames ( [ exportStarSet ] ), https://tc39.es/ecma262/#sec-getexportednames
@@ -446,18 +498,12 @@ ThrowCompletionOr<void> SourceTextModule::initialize_environment(VM& vm)
     // 18. Let code be module.[[ECMAScriptCode]].
 
     // 19. Let varDeclarations be the VarScopedDeclarations of code.
-    // NOTE: We just loop through them in step 21.
-
     // 20. Let declaredVarNames be a new empty List.
     Vector<Utf16FlyString> declared_var_names;
 
     // 21. For each element d of varDeclarations, do
     // a. For each element dn of the BoundNames of d, do
-    // NOTE: Due to the use of MUST with `create_mutable_binding` and `initialize_binding` below,
-    //       an exception should not result from `for_each_var_declared_identifier`.
-    MUST(m_ecmascript_code->for_each_var_declared_identifier([&](Identifier const& identifier) {
-        auto const& name = identifier.string();
-
+    for (auto const& name : m_var_declared_names) {
         // i. If dn is not an element of declaredVarNames, then
         if (!declared_var_names.contains_slow(name)) {
             // 1. Perform ! env.CreateMutableBinding(dn, false).
@@ -469,72 +515,47 @@ ThrowCompletionOr<void> SourceTextModule::initialize_environment(VM& vm)
             // 3. Append dn to declaredVarNames.
             declared_var_names.empend(name);
         }
-    }));
+    }
 
     // 22. Let lexDeclarations be the LexicallyScopedDeclarations of code.
-    // NOTE: We only loop through them in step 24.
-
     // 23. Let privateEnv be null.
     PrivateEnvironment* private_environment = nullptr;
 
     // 24. For each element d of lexDeclarations, do
-    // NOTE: Due to the use of MUST in the callback, an exception should not result from `for_each_lexically_scoped_declaration`.
-    MUST(m_ecmascript_code->for_each_lexically_scoped_declaration([&](Declaration const& declaration) {
+    for (auto const& binding : m_lexical_bindings) {
         // a. For each element dn of the BoundNames of d, do
-        MUST(declaration.for_each_bound_identifier([&](Identifier const& identifier) {
-            auto const& name = identifier.string();
+        // i. If IsConstantDeclaration of d is true, then
+        if (binding.is_constant) {
+            // 1. Perform ! env.CreateImmutableBinding(dn, true).
+            MUST(environment->create_immutable_binding(vm, binding.name, true));
+        }
+        // ii. Else,
+        else {
+            // 1. Perform ! env.CreateMutableBinding(dn, false).
+            MUST(environment->create_mutable_binding(vm, binding.name, false));
+        }
 
-            // i. If IsConstantDeclaration of d is true, then
-            if (declaration.is_constant_declaration()) {
-                // 1. Perform ! env.CreateImmutableBinding(dn, true).
-                MUST(environment->create_immutable_binding(vm, name, true));
-            }
-            // ii. Else,
-            else {
-                // 1. Perform ! env.CreateMutableBinding(dn, false).
-                MUST(environment->create_mutable_binding(vm, name, false));
-            }
+        // iii. If d is a FunctionDeclaration, a GeneratorDeclaration, an AsyncFunctionDeclaration, or an AsyncGeneratorDeclaration, then
+        if (binding.function_index >= 0) {
+            auto const& function_to_initialize = m_functions_to_initialize[binding.function_index];
 
-            // iii. If d is a FunctionDeclaration, a GeneratorDeclaration, an AsyncFunctionDeclaration, or an AsyncGeneratorDeclaration, then
-            if (declaration.is_function_declaration()) {
-                VERIFY(is<FunctionDeclaration>(declaration));
-                auto const& function_declaration = static_cast<FunctionDeclaration const&>(declaration);
+            // 1. Let fo be InstantiateFunctionObject of d with arguments env and privateEnv.
+            auto function = ECMAScriptFunctionObject::create_from_function_data(
+                realm,
+                function_to_initialize.shared_data,
+                environment,
+                private_environment);
 
-                // 1. Let fo be InstantiateFunctionObject of d with arguments env and privateEnv.
-                // NOTE: Special case if the function is a default export of an anonymous function
-                //       it has name "*default*" but internally should have name "default".
-                auto function_name = function_declaration.name();
-                if (function_name == ExportStatement::local_name_for_default)
-                    function_name = "default"_utf16_fly_string;
-                auto function = ECMAScriptFunctionObject::create_from_function_node(
-                    function_declaration,
-                    move(function_name),
-                    realm,
-                    environment,
-                    private_environment);
-
-                // 2. Perform ! env.InitializeBinding(dn, fo, normal).
-                MUST(environment->initialize_binding(vm, name, function, Environment::InitializeBindingHint::Normal));
-            }
-        }));
-    }));
+            // 2. Perform ! env.InitializeBinding(dn, fo, normal).
+            MUST(environment->initialize_binding(vm, binding.name, function, Environment::InitializeBindingHint::Normal));
+        }
+    }
 
     // NOTE: The default export name is also part of the local lexical declarations but instead of making that a special
     //       case in the parser we just check it here. This is only needed for things which are not declarations. For more
     //       info check Parser::parse_export_statement. Furthermore, that declaration is not constant. so we take 24.a.ii.
-    if (m_default_export) {
-        VERIFY(m_default_export->has_statement());
-
-        if (auto const& statement = m_default_export->statement(); !is<Declaration>(statement)) {
-            auto const& name = m_default_export->entries()[0].local_or_import_name.value();
-            dbgln_if(JS_MODULE_DEBUG, "[JS MODULE] Adding default export to lexical declarations: local name: {}, Expression: {}", name, statement.class_name());
-
-            // 1. Perform ! env.CreateMutableBinding(dn, false).
-            MUST(environment->create_mutable_binding(vm, name, false));
-
-            // NOTE: Since this is not a function declaration 24.a.iii never applies
-        }
-    }
+    if (m_default_export_binding_name.has_value())
+        MUST(environment->create_mutable_binding(vm, *m_default_export_binding_name, false));
 
     // 25. Remove moduleContext from the execution context stack.
     vm.pop_execution_context();
@@ -685,26 +706,16 @@ ThrowCompletionOr<void> SourceTextModule::execute_module(VM& vm, GC::Ptr<Promise
 {
     dbgln_if(JS_MODULE_DEBUG, "[JS MODULE] SourceTextModule::execute_module({}, PromiseCapability @ {})", filename(), capability.ptr());
 
-    GC::Ptr<Bytecode::Executable> executable;
-    if (!m_has_top_level_await) {
-        Completion result;
-
-        auto maybe_executable = Bytecode::compile(vm, m_ecmascript_code, FunctionKind::Normal, "ShadowRealmEval"_utf16_fly_string);
-        if (maybe_executable.is_error()) {
-            result = maybe_executable.release_error();
-        } else {
-            executable = maybe_executable.release_value();
-        }
-
-        if (result.is_error())
-            return result.release_error();
+    if (!m_has_top_level_await && !m_executable) {
+        m_executable = Bytecode::compile(vm, *m_ecmascript_code, FunctionKind::Normal, "ShadowRealmEval"_utf16_fly_string);
+        m_ecmascript_code = nullptr;
     }
 
     u32 registers_and_locals_count = 0;
     u32 constants_count = 0;
-    if (executable) {
-        registers_and_locals_count = executable->registers_and_locals_count;
-        constants_count = executable->constants.size();
+    if (m_executable) {
+        registers_and_locals_count = m_executable->registers_and_locals_count;
+        constants_count = m_executable->constants.size();
     }
 
     // 1. Let moduleContext be a new ECMAScript code execution context.
@@ -745,7 +756,7 @@ ThrowCompletionOr<void> SourceTextModule::execute_module(VM& vm, GC::Ptr<Promise
         // c. Let result be the result of evaluating module.[[ECMAScriptCode]].
         Completion result;
 
-        auto result_or_error = vm.bytecode_interpreter().run_executable(*module_context, *executable, {});
+        auto result_or_error = vm.bytecode_interpreter().run_executable(*module_context, *m_executable, {});
         if (result_or_error.is_error()) {
             result = result_or_error.release_error();
         } else {
@@ -786,13 +797,8 @@ ThrowCompletionOr<void> SourceTextModule::execute_module(VM& vm, GC::Ptr<Promise
         //       the async execution context captures the module execution context.
         vm.push_execution_context(*module_context);
 
-        FunctionParsingInsights parsing_insights;
-        parsing_insights.uses_this_from_environment = true;
-        parsing_insights.uses_this = true;
-        auto module_wrapper_function = ECMAScriptFunctionObject::create(
-            realm(), "module code with top-level await"_utf16_fly_string, StringView {}, this->m_ecmascript_code,
-            FunctionParameters::empty(), 0, {}, environment(), nullptr, FunctionKind::Async, true, parsing_insights);
-        module_wrapper_function->set_is_module_wrapper(true);
+        auto module_wrapper_function = ECMAScriptFunctionObject::create_from_function_data(
+            realm(), *m_tla_shared_data, environment(), nullptr);
 
         vm.pop_execution_context();
 

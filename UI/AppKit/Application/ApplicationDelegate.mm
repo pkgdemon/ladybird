@@ -198,7 +198,7 @@
 - (void)closeCurrentTab:(id)sender
 {
     auto* current_window = [NSApp keyWindow];
-    [current_window close];
+    [current_window performClose:self];
 }
 
 - (void)clearHistory:(id)sender
@@ -433,6 +433,17 @@
         auto* tab = (Tab*)[controller window];
         [[tab web_view] handleDisplayRefreshRateChange];
     }
+}
+
+- (BOOL)validateMenuItem:(NSMenuItem*)menu
+{
+    SEL action = [menu action];
+
+    if (action == @selector(closeCurrentTab:)) {
+        return [[NSApp keyWindow] isKindOfClass:[Tab class]];
+    }
+
+    return YES;
 }
 
 @end

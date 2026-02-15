@@ -11,9 +11,8 @@
 #include <AK/OwnPtr.h>
 #include <LibGC/Function.h>
 #include <LibGfx/Forward.h>
-#include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/DocumentLoadEventDelayer.h>
-#include <LibWeb/HTML/BrowsingContext.h>
+#include <LibWeb/DOM/ViewportClient.h>
 #include <LibWeb/HTML/CORSSettingAttribute.h>
 #include <LibWeb/HTML/FormAssociatedElement.h>
 #include <LibWeb/HTML/HTMLElement.h>
@@ -28,7 +27,7 @@ class HTMLImageElement final
     , public FormAssociatedElement
     , public LazyLoadingElement<HTMLImageElement>
     , public Layout::ImageProvider
-    , public DOM::Document::ViewportClient {
+    , public DOM::ViewportClient {
     WEB_PLATFORM_OBJECT(HTMLImageElement, HTMLElement);
     GC_DECLARE_ALLOCATOR(HTMLImageElement);
     FORM_ASSOCIATED_ELEMENT(HTMLElement, HTMLImageElement);
@@ -92,6 +91,10 @@ public:
     [[nodiscard]] Optional<ImageSourceAndPixelDensity> select_an_image_source();
 
     void set_source_set(SourceSet);
+
+    // https://html.spec.whatwg.org/multipage/embedded-content.html#the-img-element:dimension-attribute-source
+    DOM::Element const& dimension_attribute_source() const;
+    void set_dimension_attribute_source(DOM::Element const*);
 
     ImageRequest& current_request() { return *m_current_request; }
     ImageRequest const& current_request() const { return *m_current_request; }
@@ -168,6 +171,10 @@ private:
     SourceSet m_source_set;
 
     CSSPixelSize m_last_seen_viewport_size;
+
+    // https://html.spec.whatwg.org/multipage/embedded-content.html#the-img-element:dimension-attribute-source
+    // Each img element has a dimension attribute source, which must initially be the img element itself.
+    GC::Ptr<DOM::Element const> m_dimension_attribute_source;
 
     u64 m_update_the_image_data_count { 0 };
 };

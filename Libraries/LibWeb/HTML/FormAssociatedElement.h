@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2021, Andreas Kling <andreas@ladybird.org>
- * Copyright (c) 2024, Jelle Raaijmakers <jelle@ladybird.org>
+ * Copyright (c) 2024-2026, Jelle Raaijmakers <jelle@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -237,13 +237,15 @@ public:
     bool has_scheduled_selectionchange_event() const { return m_has_scheduled_selectionchange_event; }
     void set_scheduled_selectionchange_event(bool value) { m_has_scheduled_selectionchange_event = value; }
 
-    virtual void did_edit_text_node() = 0;
+    virtual void did_edit_text_node(FlyString const& input_type, Optional<Utf16String> const& data) = 0;
 
     virtual GC::Ptr<DOM::Text> form_associated_element_to_text_node() = 0;
     virtual GC::Ptr<DOM::Text const> form_associated_element_to_text_node() const { return const_cast<FormAssociatedTextControlElement&>(*this).form_associated_element_to_text_node(); }
 
-    virtual void handle_insert(Utf16String const&) override;
-    virtual void handle_delete(DeleteDirection) override;
+    virtual GC::Ptr<DOM::Element> text_control_scroll_container() = 0;
+
+    virtual void handle_insert(FlyString const& input_type, Utf16String const&) override;
+    virtual void handle_delete(FlyString const& input_type) override;
     virtual void select_all() override;
     virtual void set_selection_anchor(GC::Ref<DOM::Node>, size_t offset) override;
     virtual void set_selection_focus(GC::Ref<DOM::Node>, size_t offset) override;
@@ -266,6 +268,7 @@ private:
     virtual GC::Ref<JS::Cell> as_cell() override;
 
     void collapse_selection_to_offset(size_t);
+    void scroll_cursor_into_view();
     void selection_was_changed();
 
     // https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#concept-textarea/input-selection

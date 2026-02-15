@@ -9,8 +9,10 @@
 
 #include <LibWeb/Bindings/HTMLSelectElementPrototype.h>
 #include <LibWeb/Bindings/Intrinsics.h>
+#include <LibWeb/CSS/CSSStyleProperties.h>
 #include <LibWeb/CSS/ComputedProperties.h>
 #include <LibWeb/CSS/StyleValues/DisplayStyleValue.h>
+#include <LibWeb/CSS/StyleValues/KeywordStyleValue.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/ElementFactory.h>
 #include <LibWeb/DOM/Event.h>
@@ -85,6 +87,9 @@ void HTMLSelectElement::adjust_computed_style(CSS::ComputedProperties& style)
     //         This is required for the internal shadow tree to work correctly in layout.
     if (style.display().is_inline_outside() && style.display().is_flow_inside())
         style.set_property(CSS::PropertyID::Display, CSS::DisplayStyleValue::create(CSS::Display::from_short(CSS::Display::Short::InlineBlock)));
+
+    // AD-HOC: Enforce normal line-height for select elements. This matches the behavior of other engines.
+    style.set_property(CSS::PropertyID::LineHeight, CSS::KeywordStyleValue::create(CSS::Keyword::Normal));
 }
 
 // https://html.spec.whatwg.org/multipage/form-elements.html#concept-select-size
@@ -692,6 +697,7 @@ void HTMLSelectElement::create_shadow_tree_if_needed()
         return;
 
     auto shadow_root = realm().create<DOM::ShadowRoot>(document(), *this, Bindings::ShadowRootMode::Closed);
+    shadow_root->set_user_agent_internal(true);
     set_shadow_root(shadow_root);
 
     auto border = DOM::create_element(document(), HTML::TagNames::div, Namespace::HTML).release_value_but_fixme_should_propagate_errors();

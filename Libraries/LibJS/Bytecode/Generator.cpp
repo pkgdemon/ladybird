@@ -15,6 +15,7 @@
 #include <LibJS/Bytecode/Register.h>
 #include <LibJS/Runtime/ECMAScriptFunctionObject.h>
 #include <LibJS/Runtime/NativeJavaScriptBackedFunction.h>
+#include <LibJS/Runtime/SharedFunctionInstanceData.h>
 #include <LibJS/Runtime/VM.h>
 
 namespace JS::Bytecode {
@@ -34,7 +35,26 @@ Generator::Generator(VM& vm, GC::Ptr<SharedFunctionInstanceData const> shared_fu
 {
 }
 
-CodeGenerationErrorOr<void> Generator::emit_function_declaration_instantiation(SharedFunctionInstanceData const& shared_function_instance_data)
+static GC::Ref<SharedFunctionInstanceData> ensure_shared_function_data(VM& vm, FunctionNode const& function_node, Utf16FlyString name)
+{
+    return SharedFunctionInstanceData::create_for_function_node(vm, function_node, move(name));
+}
+
+u32 Generator::register_shared_function_data(GC::Ref<SharedFunctionInstanceData> data)
+{
+    auto index = static_cast<u32>(m_shared_function_data.size());
+    m_shared_function_data.append(data);
+    return index;
+}
+
+u32 Generator::register_class_blueprint(ClassBlueprint blueprint)
+{
+    auto index = static_cast<u32>(m_class_blueprints.size());
+    m_class_blueprints.append(move(blueprint));
+    return index;
+}
+
+void Generator::emit_function_declaration_instantiation(SharedFunctionInstanceData const& shared_function_instance_data)
 {
     if (shared_function_instance_data.m_has_parameter_expressions) {
         bool has_non_local_parameters = false;
@@ -44,8 +64,12 @@ CodeGenerationErrorOr<void> Generator::emit_function_declaration_instantiation(S
                 break;
             }
         }
-        if (has_non_local_parameters)
-            emit<Op::CreateLexicalEnvironment>(OptionalNone {}, 0);
+        if (has_non_local_parameters) {
+            auto parent_environment = m_lexical_environment_register_stack.last();
+            auto new_environment = allocate_register();
+            emit<Op::CreateLexicalEnvironment>(new_environment, parent_environment, 0);
+            m_lexical_environment_register_stack.append(new_environment);
+        }
     }
 
     for (auto const& parameter_name : shared_function_instance_data.m_parameter_names) {
@@ -90,7 +114,7 @@ CodeGenerationErrorOr<void> Generator::emit_function_declaration_instantiation(S
                 Label { if_not_undefined_block });
 
             switch_to_basic_block(if_undefined_block);
-            auto operand = TRY(parameter.default_value->generate_bytecode(*this));
+            auto operand = parameter.default_value->generate_bytecode(*this);
             emit<Op::Mov>(Operand { Operand::Type::Argument, param_index }, *operand);
             emit<Op::Jump>(Label { if_not_undefined_block });
 
@@ -111,60 +135,57 @@ CodeGenerationErrorOr<void> Generator::emit_function_declaration_instantiation(S
         } else if (auto const* binding_pattern = parameter.binding.get_pointer<NonnullRefPtr<BindingPattern const>>(); binding_pattern) {
             ScopedOperand argument { *this, Operand { Operand::Type::Argument, param_index } };
             auto init_mode = shared_function_instance_data.m_has_duplicates ? Op::BindingInitializationMode::Set : Bytecode::Op::BindingInitializationMode::Initialize;
-            TRY((*binding_pattern)->generate_bytecode(*this, init_mode, argument));
+            (*binding_pattern)->generate_bytecode(*this, init_mode, argument);
         }
     }
 
-    ScopeNode const* scope_body = nullptr;
-    if (is<ScopeNode>(*shared_function_instance_data.m_ecmascript_code))
-        scope_body = &static_cast<ScopeNode const&>(*shared_function_instance_data.m_ecmascript_code);
-
     if (!shared_function_instance_data.m_has_parameter_expressions) {
-        if (scope_body) {
-            for (auto const& variable_to_initialize : shared_function_instance_data.m_var_names_to_initialize_binding) {
-                auto const& id = variable_to_initialize.identifier;
-                if (id.is_local()) {
-                    emit<Op::Mov>(local(id.local_index()), add_constant(js_undefined()));
+        if (shared_function_instance_data.m_has_scope_body) {
+            for (auto const& var : shared_function_instance_data.m_var_names_to_initialize_binding) {
+                if (var.local.is_variable() || var.local.is_argument()) {
+                    emit<Op::Mov>(local(var.local), add_constant(js_undefined()));
                 } else {
-                    auto intern_id = intern_identifier(id.string());
+                    auto intern_id = intern_identifier(var.name);
                     emit<Op::CreateVariable>(intern_id, Op::EnvironmentMode::Var, false, false, false);
                     emit<Op::InitializeVariableBinding>(intern_id, add_constant(js_undefined()));
                 }
             }
         }
     } else {
-        bool has_non_local_parameters = false;
-        if (scope_body) {
-            for (auto const& variable_to_initialize : shared_function_instance_data.m_var_names_to_initialize_binding) {
-                auto const& id = variable_to_initialize.identifier;
-                if (!id.is_local()) {
-                    has_non_local_parameters = true;
+        bool has_non_local_vars = false;
+        if (shared_function_instance_data.m_has_scope_body) {
+            for (auto const& var : shared_function_instance_data.m_var_names_to_initialize_binding) {
+                if (!var.local.is_variable() && !var.local.is_argument()) {
+                    has_non_local_vars = true;
                     break;
                 }
             }
         }
 
-        if (has_non_local_parameters)
+        if (has_non_local_vars) {
             emit<Op::CreateVariableEnvironment>(shared_function_instance_data.m_var_environment_bindings_count);
+            auto variable_environment = allocate_register();
+            emit<Op::GetLexicalEnvironment>(variable_environment);
+            m_lexical_environment_register_stack.append(variable_environment);
+        }
 
-        if (scope_body) {
-            for (auto const& variable_to_initialize : shared_function_instance_data.m_var_names_to_initialize_binding) {
-                auto const& id = variable_to_initialize.identifier;
+        if (shared_function_instance_data.m_has_scope_body) {
+            for (auto const& var : shared_function_instance_data.m_var_names_to_initialize_binding) {
                 auto initial_value = allocate_register();
-                if (!variable_to_initialize.parameter_binding || variable_to_initialize.function_name) {
+                if (!var.parameter_binding || var.function_name) {
                     emit<Op::Mov>(initial_value, add_constant(js_undefined()));
                 } else {
-                    if (id.is_local()) {
-                        emit<Op::Mov>(initial_value, local(id.local_index()));
+                    if (var.local.is_variable() || var.local.is_argument()) {
+                        emit<Op::Mov>(initial_value, local(var.local));
                     } else {
-                        emit<Op::GetBinding>(initial_value, intern_identifier(id.string()));
+                        emit<Op::GetBinding>(initial_value, intern_identifier(var.name));
                     }
                 }
 
-                if (id.is_local()) {
-                    emit<Op::Mov>(local(id.local_index()), initial_value);
+                if (var.local.is_variable() || var.local.is_argument()) {
+                    emit<Op::Mov>(local(var.local), initial_value);
                 } else {
-                    auto intern_id = intern_identifier(id.string());
+                    auto intern_id = intern_identifier(var.name);
                     emit<Op::CreateVariable>(intern_id, Op::EnvironmentMode::Var, false, false, false);
                     emit<Op::InitializeVariableBinding>(intern_id, initial_value);
                 }
@@ -172,7 +193,7 @@ CodeGenerationErrorOr<void> Generator::emit_function_declaration_instantiation(S
         }
     }
 
-    if (!shared_function_instance_data.m_strict && scope_body) {
+    if (!shared_function_instance_data.m_strict && shared_function_instance_data.m_has_scope_body) {
         for (auto const& function_name : shared_function_instance_data.m_function_names_to_initialize_binding) {
             auto intern_id = intern_identifier(function_name);
             emit<Op::CreateVariable>(intern_id, Op::EnvironmentMode::Var, false, false, false);
@@ -181,45 +202,37 @@ CodeGenerationErrorOr<void> Generator::emit_function_declaration_instantiation(S
     }
 
     if (!shared_function_instance_data.m_strict) {
-        bool can_elide_lexical_environment = !scope_body || !scope_body->has_non_local_lexical_declarations();
-        if (!can_elide_lexical_environment) {
-            emit<Op::CreateLexicalEnvironment>(OptionalNone {}, shared_function_instance_data.m_lex_environment_bindings_count);
+        if (shared_function_instance_data.m_has_non_local_lexical_declarations) {
+            auto parent_environment = m_lexical_environment_register_stack.last();
+            auto new_environment = allocate_register();
+            emit<Op::CreateLexicalEnvironment>(new_environment, parent_environment, shared_function_instance_data.m_lex_environment_bindings_count);
+            m_lexical_environment_register_stack.append(new_environment);
         }
     }
 
-    if (scope_body) {
-        MUST(scope_body->for_each_lexically_scoped_declaration([&](Declaration const& declaration) {
-            MUST(declaration.for_each_bound_identifier([&](auto const& id) {
-                if (id.is_local()) {
-                    return;
-                }
-
-                emit<Op::CreateVariable>(intern_identifier(id.string()),
-                    Op::EnvironmentMode::Lexical,
-                    declaration.is_constant_declaration(),
-                    false,
-                    declaration.is_constant_declaration());
-            }));
-        }));
+    for (auto const& binding : shared_function_instance_data.m_lexical_bindings) {
+        emit<Op::CreateVariable>(intern_identifier(binding.name),
+            Op::EnvironmentMode::Lexical,
+            binding.is_constant,
+            false,
+            binding.is_constant);
     }
 
-    for (auto const& declaration : shared_function_instance_data.m_functions_to_initialize) {
-        auto const& identifier = *declaration.name_identifier();
-        if (identifier.is_local()) {
-            auto local_index = identifier.local_index();
-            emit<Op::NewFunction>(local(local_index), declaration, OptionalNone {}, OptionalNone {});
-            set_local_initialized(local_index);
+    for (auto const& function_to_initialize : shared_function_instance_data.m_functions_to_initialize) {
+        auto data_index = register_shared_function_data(function_to_initialize.shared_data);
+
+        if (function_to_initialize.local.is_variable() || function_to_initialize.local.is_argument()) {
+            emit<Op::NewFunction>(local(function_to_initialize.local), data_index, OptionalNone {}, OptionalNone {});
+            set_local_initialized(function_to_initialize.local);
         } else {
             auto function = allocate_register();
-            emit<Op::NewFunction>(function, declaration, OptionalNone {}, OptionalNone {});
-            emit<Op::SetVariableBinding>(intern_identifier(declaration.name()), function);
+            emit<Op::NewFunction>(function, data_index, OptionalNone {}, OptionalNone {});
+            emit<Op::SetVariableBinding>(intern_identifier(function_to_initialize.name), function);
         }
     }
-
-    return {};
 }
 
-CodeGenerationErrorOr<GC::Ref<Executable>> Generator::compile(VM& vm, ASTNode const& node, FunctionKind enclosing_function_kind, GC::Ptr<SharedFunctionInstanceData const> shared_function_instance_data, MustPropagateCompletion must_propagate_completion, BuiltinAbstractOperationsEnabled builtin_abstract_operations_enabled, Vector<LocalVariable> local_variable_names)
+GC::Ref<Executable> Generator::compile(VM& vm, ASTNode const& node, FunctionKind enclosing_function_kind, GC::Ptr<SharedFunctionInstanceData const> shared_function_instance_data, MustPropagateCompletion must_propagate_completion, BuiltinAbstractOperationsEnabled builtin_abstract_operations_enabled, Vector<LocalVariable> local_variable_names)
 {
     Generator generator(vm, shared_function_instance_data, must_propagate_completion, builtin_abstract_operations_enabled);
 
@@ -243,8 +256,13 @@ CodeGenerationErrorOr<GC::Ref<Executable>> Generator::compile(VM& vm, ASTNode co
         //       will not enter the generator from the SuspendedStart state and immediately completes the generator.
     }
 
+    // NOTE: We eagerly initialize the saved lexical environment register here,
+    //       before any AST codegen runs, so that GetLexicalEnvironment is emitted
+    //       at the function entry point, dominating all uses.
+    generator.ensure_lexical_environment_register_initialized();
+
     if (shared_function_instance_data)
-        TRY(generator.emit_function_declaration_instantiation(*shared_function_instance_data));
+        generator.emit_function_declaration_instantiation(*shared_function_instance_data);
 
     if (generator.is_in_generator_function()) {
         // Immediately yield with no value.
@@ -255,7 +273,7 @@ CodeGenerationErrorOr<GC::Ref<Executable>> Generator::compile(VM& vm, ASTNode co
         //       will not enter the generator from the SuspendedStart state and immediately completes the generator.
     }
 
-    auto last_value = TRY(node.generate_bytecode(generator));
+    auto last_value = node.generate_bytecode(generator);
 
     if (!generator.current_block().is_terminated() && last_value.has_value()) {
         generator.emit<Bytecode::Op::End>(last_value.value());
@@ -289,11 +307,10 @@ CodeGenerationErrorOr<GC::Ref<Executable>> Generator::compile(VM& vm, ASTNode co
         size_t start_offset;
         size_t end_offset;
         BasicBlock const* handler;
-        BasicBlock const* finalizer;
     };
     Vector<UnlinkedExceptionHandlers> unlinked_exception_handlers;
 
-    HashMap<size_t, SourceRecord> source_map;
+    Vector<SourceMapEntry> source_map;
 
     Optional<ScopedOperand> undefined_constant;
 
@@ -349,19 +366,19 @@ CodeGenerationErrorOr<GC::Ref<Executable>> Generator::compile(VM& vm, ASTNode co
 
     for (auto& block : generator.m_root_basic_blocks) {
         basic_block_start_offsets.append(bytecode.size());
-        if (block->handler() || block->finalizer()) {
+        if (block->handler()) {
             unlinked_exception_handlers.append({
                 .start_offset = bytecode.size(),
                 .end_offset = 0,
                 .handler = block->handler(),
-                .finalizer = block->finalizer(),
             });
         }
 
         block_offsets.set(block.ptr(), bytecode.size());
 
-        for (auto& [offset, source_record] : block->source_map()) {
-            source_map.set(bytecode.size() + offset, source_record);
+        for (auto const& entry : block->source_map()) {
+            VERIFY(bytecode.size() <= NumericLimits<u32>::max());
+            source_map.append({ static_cast<u32>(bytecode.size()) + entry.bytecode_offset, entry.source_record });
         }
 
         Bytecode::InstructionStreamIterator it(block->instruction_stream());
@@ -440,7 +457,7 @@ CodeGenerationErrorOr<GC::Ref<Executable>> Generator::compile(VM& vm, ASTNode co
             Op::End end(*undefined_constant);
             bytecode.append(reinterpret_cast<u8 const*>(&end), end.length());
         }
-        if (block->handler() || block->finalizer()) {
+        if (block->handler()) {
             unlinked_exception_handlers.last().end_offset = bytecode.size();
         }
     }
@@ -470,18 +487,17 @@ CodeGenerationErrorOr<GC::Ref<Executable>> Generator::compile(VM& vm, ASTNode co
     for (auto& unlinked_handler : unlinked_exception_handlers) {
         auto start_offset = unlinked_handler.start_offset;
         auto end_offset = unlinked_handler.end_offset;
-        auto handler_offset = unlinked_handler.handler ? block_offsets.get(unlinked_handler.handler).value() : Optional<size_t> {};
-        auto finalizer_offset = unlinked_handler.finalizer ? block_offsets.get(unlinked_handler.finalizer).value() : Optional<size_t> {};
+        auto handler_offset = block_offsets.get(unlinked_handler.handler).value();
 
         auto maybe_exception_handler_to_merge_with = linked_exception_handlers.find_if([&](Executable::ExceptionHandlers const& exception_handler) {
-            return exception_handler.end_offset == start_offset && exception_handler.handler_offset == handler_offset && exception_handler.finalizer_offset == finalizer_offset;
+            return exception_handler.end_offset == start_offset && exception_handler.handler_offset == handler_offset;
         });
 
         if (!maybe_exception_handler_to_merge_with.is_end()) {
             auto& exception_handler_to_merge_with = *maybe_exception_handler_to_merge_with;
             exception_handler_to_merge_with.end_offset = end_offset;
         } else {
-            linked_exception_handlers.append({ start_offset, end_offset, handler_offset, finalizer_offset });
+            linked_exception_handlers.append({ start_offset, end_offset, handler_offset });
         }
     }
 
@@ -493,6 +509,13 @@ CodeGenerationErrorOr<GC::Ref<Executable>> Generator::compile(VM& vm, ASTNode co
     executable->basic_block_start_offsets = move(basic_block_start_offsets);
     executable->source_map = move(source_map);
     executable->local_variable_names = move(local_variable_names);
+
+    executable->shared_function_data.ensure_capacity(generator.m_shared_function_data.size());
+    for (auto& root : generator.m_shared_function_data)
+        executable->shared_function_data.append(root.ptr());
+
+    executable->class_blueprints = move(generator.m_class_blueprints);
+
     // NB: Layout is [registers | locals | constants | arguments]
     executable->local_index_base = number_of_registers;
 
@@ -521,7 +544,7 @@ CodeGenerationErrorOr<GC::Ref<Executable>> Generator::compile(VM& vm, ASTNode co
     return executable;
 }
 
-CodeGenerationErrorOr<GC::Ref<Executable>> Generator::generate_from_ast_node(VM& vm, ASTNode const& node, FunctionKind enclosing_function_kind)
+GC::Ref<Executable> Generator::generate_from_ast_node(VM& vm, ASTNode const& node, FunctionKind enclosing_function_kind)
 {
     Vector<LocalVariable> local_variable_names;
     if (is<ScopeNode>(node))
@@ -529,8 +552,9 @@ CodeGenerationErrorOr<GC::Ref<Executable>> Generator::generate_from_ast_node(VM&
     return compile(vm, node, enclosing_function_kind, {}, MustPropagateCompletion::Yes, BuiltinAbstractOperationsEnabled::No, move(local_variable_names));
 }
 
-CodeGenerationErrorOr<GC::Ref<Executable>> Generator::generate_from_function(VM& vm, GC::Ref<SharedFunctionInstanceData const> shared_function_instance_data, BuiltinAbstractOperationsEnabled builtin_abstract_operations_enabled)
+GC::Ref<Executable> Generator::generate_from_function(VM& vm, GC::Ref<SharedFunctionInstanceData const> shared_function_instance_data, BuiltinAbstractOperationsEnabled builtin_abstract_operations_enabled)
 {
+    VERIFY(!shared_function_instance_data->m_executable);
     return compile(vm, *shared_function_instance_data->m_ecmascript_code, shared_function_instance_data->m_kind, shared_function_instance_data, MustPropagateCompletion::No, builtin_abstract_operations_enabled, shared_function_instance_data->m_local_variables_names);
 }
 
@@ -561,6 +585,13 @@ ScopedOperand Generator::local(Identifier::Local const& local)
     return ScopedOperand { *this, Operand { Operand::Type::Argument, static_cast<u32>(local.index) } };
 }
 
+ScopedOperand Generator::local(FunctionLocal const& local)
+{
+    if (local.is_variable())
+        return ScopedOperand { *this, Operand { Operand::Type::Local, static_cast<u32>(local.index) } };
+    return ScopedOperand { *this, Operand { Operand::Type::Argument, static_cast<u32>(local.index) } };
+}
+
 Generator::SourceLocationScope::SourceLocationScope(Generator& generator, ASTNode const& node)
     : m_generator(generator)
     , m_previous_node(m_generator.m_current_ast_node)
@@ -573,9 +604,9 @@ Generator::SourceLocationScope::~SourceLocationScope()
     m_generator.m_current_ast_node = m_previous_node;
 }
 
-Generator::UnwindContext::UnwindContext(Generator& generator, Optional<Label> finalizer)
+Generator::UnwindContext::UnwindContext(Generator& generator, Optional<Label> handler)
     : m_generator(generator)
-    , m_finalizer(finalizer)
+    , m_handler(handler)
     , m_previous_context(m_generator.m_current_unwind_context)
 {
     m_generator.m_current_unwind_context = this;
@@ -609,8 +640,10 @@ bool Generator::emit_block_declaration_instantiation(ScopeNode const& scope_node
     if (!needs_block_declaration_instantiation)
         return false;
 
+    auto parent_environment = m_lexical_environment_register_stack.last();
     auto environment = allocate_register();
-    emit<Bytecode::Op::CreateLexicalEnvironment>(environment, 0);
+    emit<Bytecode::Op::CreateLexicalEnvironment>(environment, parent_environment, 0);
+    m_lexical_environment_register_stack.append(environment);
     start_boundary(BlockBoundaryType::LeaveLexicalEnvironment);
 
     MUST(scope_node.for_each_lexically_scoped_declaration([&](Declaration const& declaration) {
@@ -644,8 +677,10 @@ bool Generator::emit_block_declaration_instantiation(ScopeNode const& scope_node
             auto& function_declaration = static_cast<FunctionDeclaration const&>(declaration);
 
             // ii. Let fo be InstantiateFunctionObject of d with arguments env and privateEnv.
+            auto shared_data = ensure_shared_function_data(m_vm, function_declaration, function_declaration.name());
+            auto data_index = register_shared_function_data(shared_data);
             auto fo = allocate_register();
-            emit<Bytecode::Op::NewFunction>(fo, function_declaration, OptionalNone {}, OptionalNone {});
+            emit<Bytecode::Op::NewFunction>(fo, data_index, OptionalNone {}, OptionalNone {});
 
             // iii. Perform ! env.InitializeBinding(fn, fo). NOTE: This step is replaced in section B.3.2.6.
             if (function_declaration.name_identifier()->is_local()) {
@@ -666,22 +701,50 @@ bool Generator::emit_block_declaration_instantiation(ScopeNode const& scope_node
 
 void Generator::begin_variable_scope()
 {
+    auto parent_environment = m_lexical_environment_register_stack.last();
+    auto new_environment = allocate_register();
     start_boundary(BlockBoundaryType::LeaveLexicalEnvironment);
-    emit<Bytecode::Op::CreateLexicalEnvironment>(OptionalNone {}, 0);
+    emit<Bytecode::Op::CreateLexicalEnvironment>(new_environment, parent_environment, 0);
+    m_lexical_environment_register_stack.append(new_environment);
 }
 
 void Generator::end_variable_scope()
 {
     end_boundary(BlockBoundaryType::LeaveLexicalEnvironment);
+    m_lexical_environment_register_stack.take_last();
 
-    if (!m_current_basic_block->is_terminated()) {
-        emit<Bytecode::Op::LeaveLexicalEnvironment>();
+    if (!m_current_basic_block->is_terminated())
+        emit<Bytecode::Op::SetLexicalEnvironment>(m_lexical_environment_register_stack.last());
+}
+
+void Generator::ensure_lexical_environment_register_initialized()
+{
+    if (m_lexical_environment_register_stack.is_empty()) {
+        auto environment_register = ScopedOperand { *this, Operand { Register::saved_lexical_environment() } };
+        emit<Op::GetLexicalEnvironment>(environment_register);
+        m_lexical_environment_register_stack.append(environment_register);
     }
 }
 
-void Generator::begin_continuable_scope(Label continue_target, Vector<FlyString> const& language_label_set)
+ScopedOperand Generator::current_lexical_environment_register() const
 {
-    m_continuable_scopes.append({ continue_target, language_label_set });
+    VERIFY(!m_lexical_environment_register_stack.is_empty());
+    return m_lexical_environment_register_stack.last();
+}
+
+void Generator::push_lexical_environment_register(ScopedOperand const& environment)
+{
+    m_lexical_environment_register_stack.append(environment);
+}
+
+void Generator::pop_lexical_environment_register()
+{
+    m_lexical_environment_register_stack.take_last();
+}
+
+void Generator::begin_continuable_scope(Label continue_target, Vector<FlyString> const& language_label_set, Optional<ScopedOperand> completion_register)
+{
+    m_continuable_scopes.append({ continue_target, language_label_set, move(completion_register) });
     start_boundary(BlockBoundaryType::Continue);
 }
 
@@ -696,9 +759,9 @@ Label Generator::nearest_breakable_scope() const
     return m_breakable_scopes.last().bytecode_target;
 }
 
-void Generator::begin_breakable_scope(Label breakable_target, Vector<FlyString> const& language_label_set)
+void Generator::begin_breakable_scope(Label breakable_target, Vector<FlyString> const& language_label_set, Optional<ScopedOperand> completion_register)
 {
-    m_breakable_scopes.append({ breakable_target, language_label_set });
+    m_breakable_scopes.append({ breakable_target, language_label_set, move(completion_register) });
     start_boundary(BlockBoundaryType::Break);
 }
 
@@ -708,7 +771,7 @@ void Generator::end_breakable_scope()
     end_boundary(BlockBoundaryType::Break);
 }
 
-CodeGenerationErrorOr<Generator::ReferenceOperands> Generator::emit_super_reference(MemberExpression const& expression)
+Generator::ReferenceOperands Generator::emit_super_reference(MemberExpression const& expression)
 {
     VERIFY(is<SuperExpression>(expression.object()));
 
@@ -724,7 +787,7 @@ CodeGenerationErrorOr<Generator::ReferenceOperands> Generator::emit_super_refere
         // SuperProperty : super [ Expression ]
         // 3. Let propertyNameReference be ? Evaluation of Expression.
         // 4. Let propertyNameValue be ? GetValue(propertyNameReference).
-        computed_property_value = TRY(expression.property().generate_bytecode(*this)).value();
+        computed_property_value = expression.property().generate_bytecode(*this).value();
     } else {
         // SuperProperty : super . IdentifierName
         // 3. Let propertyKey be the StringValue of IdentifierName.
@@ -750,31 +813,41 @@ CodeGenerationErrorOr<Generator::ReferenceOperands> Generator::emit_super_refere
     };
 }
 
-CodeGenerationErrorOr<Generator::ReferenceOperands> Generator::emit_load_from_reference(JS::ASTNode const& node, Optional<ScopedOperand> preferred_dst)
+Generator::ReferenceOperands Generator::emit_load_from_reference(JS::ASTNode const& node, Optional<ScopedOperand> preferred_dst)
 {
     if (is<Identifier>(node)) {
         auto& identifier = static_cast<Identifier const&>(node);
-        auto loaded_value = TRY(identifier.generate_bytecode(*this, preferred_dst)).value();
+        auto loaded_value = identifier.generate_bytecode(*this, preferred_dst).value();
         return ReferenceOperands {
             .loaded_value = loaded_value,
         };
     }
     if (!is<MemberExpression>(node)) {
-        return CodeGenerationError {
-            &node,
-            "Unimplemented/invalid node used as a reference"sv
+        // Per spec, evaluate the expression (e.g. the call in f()++) before
+        // throwing ReferenceError for invalid assignment target.
+        (void)node.generate_bytecode(*this);
+        auto exception = allocate_register();
+        emit<Bytecode::Op::NewReferenceError>(exception, intern_string(ErrorType::InvalidLeftHandAssignment.message()));
+        perform_needed_unwinds<Op::Throw>();
+        emit<Bytecode::Op::Throw>(exception);
+        switch_to_basic_block(make_block());
+        auto dummy = add_constant(js_undefined());
+        return ReferenceOperands {
+            .base = dummy,
+            .referenced_name = dummy,
+            .this_value = dummy,
+            .loaded_value = dummy,
         };
     }
     auto& expression = static_cast<MemberExpression const&>(node);
 
     // https://tc39.es/ecma262/#sec-super-keyword-runtime-semantics-evaluation
     if (is<SuperExpression>(expression.object())) {
-        auto super_reference = TRY(emit_super_reference(expression));
+        auto super_reference = emit_super_reference(expression);
         auto dst = preferred_dst.has_value() ? preferred_dst.value() : allocate_register();
 
         if (super_reference.referenced_name.has_value()) {
             // 5. Let propertyKey be ? ToPropertyKey(propertyNameValue).
-            // FIXME: This does ToPropertyKey out of order, which is observable by Symbol.toPrimitive!
             emit_get_by_value_with_this(dst, *super_reference.base, *super_reference.referenced_name, *super_reference.this_value);
         } else {
             // 3. Let propertyKey be StringValue of IdentifierName.
@@ -786,11 +859,11 @@ CodeGenerationErrorOr<Generator::ReferenceOperands> Generator::emit_load_from_re
         return super_reference;
     }
 
-    auto base = TRY(expression.object().generate_bytecode(*this)).value();
+    auto base = expression.object().generate_bytecode(*this).value();
     auto base_identifier = intern_identifier_for_expression(expression.object());
 
     if (expression.is_computed()) {
-        auto property = TRY(expression.property().generate_bytecode(*this)).value();
+        auto property = expression.property().generate_bytecode(*this).value();
         auto saved_property = allocate_register();
         emit<Bytecode::Op::Mov>(saved_property, property);
         auto dst = preferred_dst.has_value() ? preferred_dst.value() : allocate_register();
@@ -824,30 +897,26 @@ CodeGenerationErrorOr<Generator::ReferenceOperands> Generator::emit_load_from_re
             .loaded_value = dst,
         };
     }
-    return CodeGenerationError {
-        &expression,
-        "Unimplemented non-computed member expression"sv
-    };
+    VERIFY_NOT_REACHED();
 }
 
-CodeGenerationErrorOr<void> Generator::emit_store_to_reference(JS::ASTNode const& node, ScopedOperand value)
+void Generator::emit_store_to_reference(JS::ASTNode const& node, ScopedOperand value)
 {
     if (is<Identifier>(node)) {
         auto& identifier = static_cast<Identifier const&>(node);
         emit_set_variable(identifier, value);
-        return {};
+        return;
     }
     if (is<MemberExpression>(node)) {
         auto& expression = static_cast<MemberExpression const&>(node);
 
         // https://tc39.es/ecma262/#sec-super-keyword-runtime-semantics-evaluation
         if (is<SuperExpression>(expression.object())) {
-            auto super_reference = TRY(emit_super_reference(expression));
+            auto super_reference = emit_super_reference(expression);
 
             // 4. Return the Reference Record { [[Base]]: baseValue, [[ReferencedName]]: propertyKey, [[Strict]]: strict, [[ThisValue]]: actualThis }.
             if (super_reference.referenced_name.has_value()) {
                 // 5. Let propertyKey be ? ToPropertyKey(propertyNameValue).
-                // FIXME: This does ToPropertyKey out of order, which is observable by Symbol.toPrimitive!
                 emit_put_by_value_with_this(*super_reference.base, *super_reference.referenced_name, *super_reference.this_value, value, PutKind::Normal);
             } else {
                 // 3. Let propertyKey be StringValue of IdentifierName.
@@ -855,10 +924,10 @@ CodeGenerationErrorOr<void> Generator::emit_store_to_reference(JS::ASTNode const
                 emit<Bytecode::Op::PutNormalByIdWithThis>(*super_reference.base, *super_reference.this_value, property_key_table_index, value, next_property_lookup_cache());
             }
         } else {
-            auto object = TRY(expression.object().generate_bytecode(*this)).value();
+            auto object = expression.object().generate_bytecode(*this).value();
 
             if (expression.is_computed()) {
-                auto property = TRY(expression.property().generate_bytecode(*this)).value();
+                auto property = expression.property().generate_bytecode(*this).value();
                 emit_put_by_value(object, property, value, PutKind::Normal, {});
             } else if (expression.property().is_identifier()) {
                 auto property_key_table_index = intern_property_key(as<Identifier>(expression.property()).string());
@@ -867,43 +936,44 @@ CodeGenerationErrorOr<void> Generator::emit_store_to_reference(JS::ASTNode const
                 auto identifier_table_ref = intern_identifier(as<PrivateIdentifier>(expression.property()).string());
                 emit<Bytecode::Op::PutPrivateById>(object, identifier_table_ref, value);
             } else {
-                return CodeGenerationError {
-                    &expression,
-                    "Unimplemented non-computed member expression"sv
-                };
+                VERIFY_NOT_REACHED();
             }
         }
 
-        return {};
+        return;
     }
 
-    return CodeGenerationError {
-        &node,
-        "Unimplemented/invalid node used a reference"sv
-    };
+    // Per spec, evaluate the expression (e.g. the call in for(f() in ...))
+    // before throwing ReferenceError for invalid assignment target.
+    (void)node.generate_bytecode(*this);
+    auto exception = allocate_register();
+    emit<Bytecode::Op::NewReferenceError>(exception, intern_string(ErrorType::InvalidLeftHandAssignment.message()));
+    perform_needed_unwinds<Op::Throw>();
+    emit<Bytecode::Op::Throw>(exception);
+    switch_to_basic_block(make_block());
 }
 
-CodeGenerationErrorOr<void> Generator::emit_store_to_reference(ReferenceOperands const& reference, ScopedOperand value)
+void Generator::emit_store_to_reference(ReferenceOperands const& reference, ScopedOperand value)
 {
     if (reference.referenced_private_identifier.has_value()) {
         emit<Bytecode::Op::PutPrivateById>(*reference.base, *reference.referenced_private_identifier, value);
-        return {};
+        return;
     }
     if (reference.referenced_identifier.has_value()) {
         if (reference.base == reference.this_value)
             emit_put_by_id(*reference.base, *reference.referenced_identifier, value, Bytecode::PutKind::Normal, next_property_lookup_cache());
         else
             emit<Bytecode::Op::PutNormalByIdWithThis>(*reference.base, *reference.this_value, *reference.referenced_identifier, value, next_property_lookup_cache());
-        return {};
+        return;
     }
     if (reference.base == reference.this_value)
         emit_put_by_value(*reference.base, *reference.referenced_name, value, PutKind::Normal, {});
     else
         emit_put_by_value_with_this(*reference.base, *reference.referenced_name, *reference.this_value, value, PutKind::Normal);
-    return {};
+    return;
 }
 
-CodeGenerationErrorOr<Optional<ScopedOperand>> Generator::emit_delete_reference(JS::ASTNode const& node)
+Optional<ScopedOperand> Generator::emit_delete_reference(JS::ASTNode const& node)
 {
     if (is<Identifier>(node)) {
         auto& identifier = static_cast<Identifier const&>(node);
@@ -920,34 +990,31 @@ CodeGenerationErrorOr<Optional<ScopedOperand>> Generator::emit_delete_reference(
 
         // https://tc39.es/ecma262/#sec-super-keyword-runtime-semantics-evaluation
         if (is<SuperExpression>(expression.object())) {
-            auto super_reference = TRY(emit_super_reference(expression));
+            auto super_reference = emit_super_reference(expression);
 
-            auto dst = allocate_register();
-            if (super_reference.referenced_name.has_value()) {
-                emit<Bytecode::Op::DeleteByValueWithThis>(dst, *super_reference.base, *super_reference.this_value, *super_reference.referenced_name);
-            } else {
-                auto property_key_table_index = intern_property_key(as<Identifier>(expression.property()).string());
-                emit<Bytecode::Op::DeleteByIdWithThis>(dst, *super_reference.base, *super_reference.this_value, property_key_table_index);
-            }
+            auto exception = allocate_register();
+            emit<Bytecode::Op::NewReferenceError>(exception, intern_string(ErrorType::UnsupportedDeleteSuperProperty.message()));
+            perform_needed_unwinds<Op::Throw>();
+            emit<Bytecode::Op::Throw>(exception);
 
-            return dst;
+            // Switch to a new block so callers can continue emitting code
+            // (which will be unreachable, but avoids a terminated-block VERIFY).
+            switch_to_basic_block(make_block());
+            return add_constant(js_undefined());
         }
 
-        auto object = TRY(expression.object().generate_bytecode(*this)).value();
+        auto object = expression.object().generate_bytecode(*this).value();
         auto dst = allocate_register();
 
         if (expression.is_computed()) {
-            auto property = TRY(expression.property().generate_bytecode(*this)).value();
+            auto property = expression.property().generate_bytecode(*this).value();
             emit<Bytecode::Op::DeleteByValue>(dst, object, property);
         } else if (expression.property().is_identifier()) {
             auto property_key_table_index = intern_property_key(as<Identifier>(expression.property()).string());
             emit<Bytecode::Op::DeleteById>(dst, object, property_key_table_index);
         } else {
-            // NOTE: Trying to delete a private field generates a SyntaxError in the parser.
-            return CodeGenerationError {
-                &expression,
-                "Unimplemented non-computed member expression"sv
-            };
+            // NB: Trying to delete a private field generates a SyntaxError in the parser.
+            VERIFY_NOT_REACHED();
         }
         return dst;
     }
@@ -958,7 +1025,7 @@ CodeGenerationErrorOr<Optional<ScopedOperand>> Generator::emit_delete_reference(
     // 13.5.1.2 Runtime Semantics: Evaluation, https://tc39.es/ecma262/#sec-delete-operator-runtime-semantics-evaluation
     // 1. Let ref be the result of evaluating UnaryExpression.
     // 2. ReturnIfAbrupt(ref).
-    (void)TRY(node.generate_bytecode(*this));
+    (void)node.generate_bytecode(*this);
 
     // 3. If ref is not a Reference Record, return true.
     // NOTE: The rest of the steps are handled by Delete{Variable,ByValue,Id}.
@@ -968,6 +1035,10 @@ CodeGenerationErrorOr<Optional<ScopedOperand>> Generator::emit_delete_reference(
 void Generator::emit_set_variable(JS::Identifier const& identifier, ScopedOperand value, Bytecode::Op::BindingInitializationMode initialization_mode, Bytecode::Op::EnvironmentMode environment_mode)
 {
     if (identifier.is_local()) {
+        if (initialization_mode == Bytecode::Op::BindingInitializationMode::Set && identifier.declaration_kind() == DeclarationKind::Const) {
+            emit<Bytecode::Op::ThrowConstAssignment>();
+            return;
+        }
         auto local_index = identifier.local_index();
         if (value.operand().is_local() && local_index.is_variable() && value.operand().index() == local_index.index) {
             // Moving a local to itself is a no-op.
@@ -1042,50 +1113,103 @@ Optional<IdentifierTableIndex> Generator::intern_identifier_for_expression(Expre
     return {};
 }
 
+// Scans outward from boundary_index looking for another ReturnToFinally boundary
+// between the current position and the break/continue target. If found, the jump
+// must chain through multiple finally blocks via trampolines rather than jumping
+// directly to the target after a single finally.
+bool Generator::has_outer_finally_before_target(JumpType type, size_t boundary_index) const
+{
+    using enum BlockBoundaryType;
+    for (size_t j = boundary_index - 1; j > 0; --j) {
+        auto inner = m_boundaries[j - 1];
+        if ((type == JumpType::Break && inner == Break) || (type == JumpType::Continue && inner == Continue))
+            return false;
+        if (inner == ReturnToFinally)
+            return true;
+    }
+    return false;
+}
+
+// Register a jump target with the current FinallyContext. Assigns a unique
+// completion_type index, records the target in registered_jumps (so the
+// after-finally dispatch chain can route to it), and emits bytecode to set
+// completion_type and jump to the finally body.
+void Generator::register_jump_in_finally_context(Label target)
+{
+    VERIFY(m_current_finally_context);
+    auto& finally_context = *m_current_finally_context;
+    VERIFY(finally_context.next_jump_index < NumericLimits<i32>::max());
+    auto jump_index = finally_context.next_jump_index++;
+    finally_context.registered_jumps.append({ jump_index, target });
+    emit_mov(finally_context.completion_type, add_constant(Value(jump_index)));
+    emit<Op::Jump>(finally_context.finally_body);
+}
+
+// For break/continue through nested finally blocks: creates an intermediate
+// "trampoline" block that the inner finally dispatches to, which then continues
+// unwinding through the next outer finally. Each trampoline is registered as a
+// jump target in the inner finally's dispatch chain.
+void Generator::emit_trampoline_through_finally(JumpType type)
+{
+    VERIFY(m_current_finally_context);
+    auto block_name = MUST(String::formatted("{}.{}", current_block().name(), type == JumpType::Break ? "break"sv : "continue"sv));
+    auto& trampoline_block = make_block(block_name);
+    register_jump_in_finally_context(Label { trampoline_block });
+    switch_to_basic_block(trampoline_block);
+    m_current_unwind_context = m_current_unwind_context->previous();
+    m_current_finally_context = m_current_finally_context->parent;
+}
+
 void Generator::generate_scoped_jump(JumpType type)
 {
     TemporaryChange temp { m_current_unwind_context, m_current_unwind_context };
-    bool last_was_finally = false;
+    TemporaryChange finally_temp { m_current_finally_context, m_current_finally_context };
+    auto environment_stack_offset = m_lexical_environment_register_stack.size();
     for (size_t i = m_boundaries.size(); i > 0; --i) {
         auto boundary = m_boundaries[i - 1];
         using enum BlockBoundaryType;
         switch (boundary) {
         case Break:
             if (type == JumpType::Break) {
-                emit<Op::Jump>(nearest_breakable_scope());
+                auto const& target_scope = m_breakable_scopes.last();
+                if (m_current_completion_register.has_value() && target_scope.completion_register.has_value()
+                    && *m_current_completion_register != *target_scope.completion_register) {
+                    emit_mov(*target_scope.completion_register, *m_current_completion_register);
+                }
+                emit<Op::Jump>(target_scope.bytecode_target);
                 return;
             }
             break;
         case Continue:
             if (type == JumpType::Continue) {
-                emit<Op::Jump>(nearest_continuable_scope());
+                auto const& target_scope = m_continuable_scopes.last();
+                if (m_current_completion_register.has_value() && target_scope.completion_register.has_value()
+                    && *m_current_completion_register != *target_scope.completion_register) {
+                    emit_mov(*target_scope.completion_register, *m_current_completion_register);
+                }
+                emit<Op::Jump>(target_scope.bytecode_target);
                 return;
             }
             break;
-        case Unwind:
-            if (!last_was_finally) {
-                VERIFY(m_current_unwind_context && m_current_unwind_context->handler().has_value());
-                emit<Bytecode::Op::LeaveUnwindContext>();
-                m_current_unwind_context = m_current_unwind_context->previous();
-            }
-            last_was_finally = false;
-            break;
         case LeaveLexicalEnvironment:
-            emit<Bytecode::Op::LeaveLexicalEnvironment>();
+            --environment_stack_offset;
+            emit<Bytecode::Op::SetLexicalEnvironment>(m_lexical_environment_register_stack[environment_stack_offset - 1]);
             break;
         case ReturnToFinally: {
-            VERIFY(m_current_unwind_context->finalizer().has_value());
-            m_current_unwind_context = m_current_unwind_context->previous();
-            auto jump_type_name = type == JumpType::Break ? "break"sv : "continue"sv;
-            auto block_name = MUST(String::formatted("{}.{}", current_block().name(), jump_type_name));
-            auto& block = make_block(block_name);
-            emit<Op::ScheduleJump>(Label { block });
-            switch_to_basic_block(block);
-            last_was_finally = true;
+            VERIFY(m_current_finally_context);
+            if (!has_outer_finally_before_target(type, i)) {
+                auto const& target_scope = type == JumpType::Break ? m_breakable_scopes.last() : m_continuable_scopes.last();
+                if (m_current_completion_register.has_value() && target_scope.completion_register.has_value()
+                    && *m_current_completion_register != *target_scope.completion_register) {
+                    emit_mov(*target_scope.completion_register, *m_current_completion_register);
+                }
+                register_jump_in_finally_context(target_scope.bytecode_target);
+                return;
+            }
+            emit_trampoline_through_finally(type);
             break;
         }
         case LeaveFinally:
-            emit<Op::LeaveFinally>();
             break;
         }
     }
@@ -1095,32 +1219,29 @@ void Generator::generate_scoped_jump(JumpType type)
 void Generator::generate_labelled_jump(JumpType type, FlyString const& label)
 {
     TemporaryChange temp { m_current_unwind_context, m_current_unwind_context };
+    TemporaryChange finally_temp { m_current_finally_context, m_current_finally_context };
     size_t current_boundary = m_boundaries.size();
-    bool last_was_finally = false;
+    auto environment_stack_offset = m_lexical_environment_register_stack.size();
 
     auto const& jumpable_scopes = type == JumpType::Continue ? m_continuable_scopes : m_breakable_scopes;
 
     for (auto const& jumpable_scope : jumpable_scopes.in_reverse()) {
         for (; current_boundary > 0; --current_boundary) {
             auto boundary = m_boundaries[current_boundary - 1];
-            if (boundary == BlockBoundaryType::Unwind) {
-                if (!last_was_finally) {
-                    VERIFY(m_current_unwind_context && m_current_unwind_context->handler().has_value());
-                    emit<Bytecode::Op::LeaveUnwindContext>();
-                    m_current_unwind_context = m_current_unwind_context->previous();
-                }
-                last_was_finally = false;
-            } else if (boundary == BlockBoundaryType::LeaveLexicalEnvironment) {
-                emit<Bytecode::Op::LeaveLexicalEnvironment>();
+            if (boundary == BlockBoundaryType::LeaveLexicalEnvironment) {
+                --environment_stack_offset;
+                emit<Bytecode::Op::SetLexicalEnvironment>(m_lexical_environment_register_stack[environment_stack_offset - 1]);
             } else if (boundary == BlockBoundaryType::ReturnToFinally) {
-                VERIFY(m_current_unwind_context->finalizer().has_value());
-                m_current_unwind_context = m_current_unwind_context->previous();
-                auto jump_type_name = type == JumpType::Break ? "break"sv : "continue"sv;
-                auto block_name = MUST(String::formatted("{}.{}", current_block().name(), jump_type_name));
-                auto& block = make_block(block_name);
-                emit<Op::ScheduleJump>(Label { block });
-                switch_to_basic_block(block);
-                last_was_finally = true;
+                VERIFY(m_current_finally_context);
+                if (!has_outer_finally_before_target(type, current_boundary) && jumpable_scope.language_label_set.contains_slow(label)) {
+                    if (m_current_completion_register.has_value() && jumpable_scope.completion_register.has_value()
+                        && *m_current_completion_register != *jumpable_scope.completion_register) {
+                        emit_mov(*jumpable_scope.completion_register, *m_current_completion_register);
+                    }
+                    register_jump_in_finally_context(jumpable_scope.bytecode_target);
+                    return;
+                }
+                emit_trampoline_through_finally(type);
             } else if ((type == JumpType::Continue && boundary == BlockBoundaryType::Continue) || (type == JumpType::Break && boundary == BlockBoundaryType::Break)) {
                 // Make sure we don't process this boundary twice if the current jumpable scope doesn't contain the target label.
                 --current_boundary;
@@ -1129,6 +1250,10 @@ void Generator::generate_labelled_jump(JumpType type, FlyString const& label)
         }
 
         if (jumpable_scope.language_label_set.contains_slow(label)) {
+            if (m_current_completion_register.has_value() && jumpable_scope.completion_register.has_value()
+                && *m_current_completion_register != *jumpable_scope.completion_register) {
+                emit_mov(*jumpable_scope.completion_register, *m_current_completion_register);
+            }
             emit<Op::Jump>(jumpable_scope.bytecode_target);
             return;
         }
@@ -1170,30 +1295,39 @@ void Generator::pop_home_object()
 
 void Generator::emit_new_function(ScopedOperand dst, FunctionExpression const& function_node, Optional<IdentifierTableIndex> lhs_name, bool is_method)
 {
+    Utf16FlyString name;
+    if (function_node.has_name())
+        name = function_node.name();
+    else if (lhs_name.has_value())
+        name = m_identifier_table->get(lhs_name.value());
+
+    auto shared_data = ensure_shared_function_data(m_vm, function_node, move(name));
+    auto data_index = register_shared_function_data(shared_data);
+
     if (!is_method || m_home_objects.is_empty()) {
-        emit<Op::NewFunction>(dst, function_node, lhs_name, OptionalNone {});
+        emit<Op::NewFunction>(dst, data_index, lhs_name, OptionalNone {});
     } else {
-        emit<Op::NewFunction>(dst, function_node, lhs_name, m_home_objects.last());
+        emit<Op::NewFunction>(dst, data_index, lhs_name, m_home_objects.last());
     }
 }
 
-CodeGenerationErrorOr<ScopedOperand> Generator::emit_named_evaluation_if_anonymous_function(Expression const& expression, Optional<IdentifierTableIndex> lhs_name, Optional<ScopedOperand> preferred_dst, bool is_method)
+ScopedOperand Generator::emit_named_evaluation_if_anonymous_function(Expression const& expression, Optional<IdentifierTableIndex> lhs_name, Optional<ScopedOperand> preferred_dst, bool is_method)
 {
     if (is<FunctionExpression>(expression)) {
         auto const& function_expression = static_cast<FunctionExpression const&>(expression);
         if (!function_expression.has_name()) {
-            return TRY(function_expression.generate_bytecode_with_lhs_name(*this, move(lhs_name), preferred_dst, is_method)).value();
+            return function_expression.generate_bytecode_with_lhs_name(*this, move(lhs_name), preferred_dst, is_method).value();
         }
     }
 
     if (is<ClassExpression>(expression)) {
         auto const& class_expression = static_cast<ClassExpression const&>(expression);
         if (!class_expression.has_name()) {
-            return TRY(class_expression.generate_bytecode_with_lhs_name(*this, move(lhs_name), preferred_dst)).value();
+            return class_expression.generate_bytecode_with_lhs_name(*this, move(lhs_name), preferred_dst).value();
         }
     }
 
-    return TRY(expression.generate_bytecode(*this, preferred_dst)).value();
+    return expression.generate_bytecode(*this, preferred_dst).value();
 }
 
 void Generator::emit_get_by_id(ScopedOperand dst, ScopedOperand base, PropertyKeyTableIndex property_key_table_index, Optional<IdentifierTableIndex> base_identifier)
@@ -1341,6 +1475,17 @@ void Generator::set_local_initialized(Identifier::Local const& local)
     }
 }
 
+void Generator::set_local_initialized(FunctionLocal const& local)
+{
+    if (local.is_variable()) {
+        m_initialized_locals.set(local.index);
+    } else if (local.is_argument()) {
+        m_initialized_arguments.set(local.index);
+    } else {
+        VERIFY_NOT_REACHED();
+    }
+}
+
 bool Generator::is_local_lexically_declared(Identifier::Local const& local) const
 {
     if (local.is_argument())
@@ -1400,18 +1545,28 @@ bool Generator::fuse_compare_and_jump(ScopedOperand const& condition, Label true
     return false;
 }
 
+void Generator::emit_todo(StringView message)
+{
+    auto error_message = MUST(String::formatted("TODO: {}", message));
+    auto message_string = intern_string(Utf16String::from_utf8(error_message));
+    auto error_register = allocate_register();
+    emit<Op::NewTypeError>(error_register, message_string);
+    perform_needed_unwinds<Op::Throw>();
+    emit<Op::Throw>(error_register);
+    // Switch to a new block so subsequent codegen doesn't crash trying to
+    // emit into a terminated block.
+    auto& dead_block = make_block("dead"_string);
+    switch_to_basic_block(dead_block);
+}
+
 void Generator::emit_jump_if(ScopedOperand const& condition, Label true_target, Label false_target)
 {
     if (condition.operand().is_constant()) {
-        auto value = m_constants[condition.operand().index()];
-        if (value.is_boolean()) {
-            if (value.as_bool()) {
-                emit<Op::Jump>(true_target);
-            } else {
-                emit<Op::Jump>(false_target);
-            }
-            return;
-        }
+        auto value = get_constant(condition);
+
+        auto is_always_true = value.to_boolean_slow_case();
+        emit<Op::Jump>(is_always_true ? true_target : false_target);
+        return;
     }
 
     // NOTE: It's only safe to fuse compare-and-jump if the condition is a temporary with no other dependents.
@@ -1482,126 +1637,74 @@ ScopedOperand Generator::add_constant(Value value)
     return append_new_constant();
 }
 
-CodeGenerationErrorOr<void> Generator::generate_builtin_abstract_operation(Identifier const& builtin_identifier, ReadonlySpan<CallExpression::Argument> arguments, ScopedOperand const& dst)
+void Generator::generate_builtin_abstract_operation(Identifier const& builtin_identifier, ReadonlySpan<CallExpression::Argument> arguments, ScopedOperand const& dst)
 {
     VERIFY(m_builtin_abstract_operations_enabled);
-    for (auto const& argument : arguments) {
-        if (argument.is_spread) {
-            return CodeGenerationError {
-                argument.value.ptr(),
-                "Spread arguments not allowed for builtin abstract operations"sv,
-            };
-        }
-    }
+    for (auto const& argument : arguments)
+        VERIFY(!argument.is_spread);
 
     auto const& operation_name = builtin_identifier.string();
 
     if (operation_name == "IsCallable"sv) {
-        if (arguments.size() != 1) {
-            return CodeGenerationError {
-                &builtin_identifier,
-                "IsCallable only accepts one argument"sv,
-            };
-        }
-
-        auto source = TRY(arguments[0].value->generate_bytecode(*this)).value();
+        VERIFY(arguments.size() == 1);
+        auto source = arguments[0].value->generate_bytecode(*this).value();
         emit<Op::IsCallable>(dst, source);
-        return {};
+        return;
     }
 
     if (operation_name == "IsConstructor"sv) {
-        if (arguments.size() != 1) {
-            return CodeGenerationError {
-                &builtin_identifier,
-                "IsConstructor only accepts one argument"sv,
-            };
-        }
-
-        auto source = TRY(arguments[0].value->generate_bytecode(*this)).value();
+        VERIFY(arguments.size() == 1);
+        auto source = arguments[0].value->generate_bytecode(*this).value();
         emit<Op::IsConstructor>(dst, source);
-        return {};
+        return;
     }
 
     if (operation_name == "ToBoolean"sv) {
-        if (arguments.size() != 1) {
-            return CodeGenerationError {
-                &builtin_identifier,
-                "ToBoolean only accepts one argument"sv,
-            };
-        }
-
-        auto source = TRY(arguments[0].value->generate_bytecode(*this)).value();
+        VERIFY(arguments.size() == 1);
+        auto source = arguments[0].value->generate_bytecode(*this).value();
         emit<Op::ToBoolean>(dst, source);
-        return {};
+        return;
     }
 
     if (operation_name == "ToObject"sv) {
-        if (arguments.size() != 1) {
-            return CodeGenerationError {
-                &builtin_identifier,
-                "ToObject only accepts one argument"sv,
-            };
-        }
-
-        auto source = TRY(arguments[0].value->generate_bytecode(*this)).value();
+        VERIFY(arguments.size() == 1);
+        auto source = arguments[0].value->generate_bytecode(*this).value();
         emit<Op::ToObject>(dst, source);
-        return {};
+        return;
     }
 
     if (operation_name == "ThrowTypeError"sv) {
-        if (arguments.size() != 1) {
-            return CodeGenerationError {
-                &builtin_identifier,
-                "throw_type_error only accepts one argument"sv,
-            };
-        }
-
+        VERIFY(arguments.size() == 1);
         auto const* message = as_if<StringLiteral>(*arguments[0].value);
-        if (!message) {
-            return CodeGenerationError {
-                &builtin_identifier,
-                "ThrowTypeError's message must be a string literal"sv,
-            };
-        }
+        VERIFY(message);
 
         auto message_string = intern_string(message->value());
         auto type_error_register = allocate_register();
         emit<Op::NewTypeError>(type_error_register, message_string);
         perform_needed_unwinds<Op::Throw>();
         emit<Op::Throw>(type_error_register);
-        return {};
+        return;
     }
 
     if (operation_name == "ThrowIfNotObject"sv) {
-        if (arguments.size() != 1) {
-            return CodeGenerationError {
-                &builtin_identifier,
-                "ThrowIfNotObject only accepts one argument"sv,
-            };
-        }
-
-        auto source = TRY(arguments[0].value->generate_bytecode(*this)).value();
+        VERIFY(arguments.size() == 1);
+        auto source = arguments[0].value->generate_bytecode(*this).value();
         emit<Op::ThrowIfNotObject>(source);
-        return {};
+        return;
     }
 
     if (operation_name == "Call"sv) {
-        if (arguments.size() < 2) {
-            return CodeGenerationError {
-                &builtin_identifier,
-                "Call must have at least two arguments"sv,
-            };
-        }
+        VERIFY(arguments.size() >= 2);
 
         auto const& callee_argument = arguments[0].value;
-        auto callee = TRY(callee_argument->generate_bytecode(*this)).value();
-        auto this_value = TRY(arguments[1].value->generate_bytecode(*this)).value();
+        auto callee = callee_argument->generate_bytecode(*this).value();
+        auto this_value = arguments[1].value->generate_bytecode(*this).value();
         auto arguments_to_call_with = arguments.slice(2);
 
         Vector<ScopedOperand> argument_operands;
         argument_operands.ensure_capacity(arguments_to_call_with.size());
         for (auto const& argument : arguments_to_call_with) {
-            auto argument_value = TRY(argument.value->generate_bytecode(*this)).value();
+            auto argument_value = argument.value->generate_bytecode(*this).value();
             argument_operands.unchecked_append(copy_if_needed_to_preserve_evaluation_order(argument_value));
         }
 
@@ -1626,97 +1729,56 @@ CodeGenerationErrorOr<void> Generator::generate_builtin_abstract_operation(Ident
             this_value,
             expression_string_index,
             argument_operands);
-        return {};
+        return;
     }
 
     if (operation_name == "NewObjectWithNoPrototype"sv) {
-        if (!arguments.is_empty()) {
-            return CodeGenerationError {
-                &builtin_identifier,
-                "NewObjectWithNoPrototype does not take any arguments"sv,
-            };
-        }
-
+        VERIFY(arguments.is_empty());
         emit<Op::NewObjectWithNoPrototype>(dst);
-        return {};
+        return;
     }
 
     if (operation_name == "CreateAsyncFromSyncIterator"sv) {
-        if (arguments.size() != 3) {
-            return CodeGenerationError {
-                &builtin_identifier,
-                "CreateAsyncFromSyncIterator only accepts exactly three arguments"sv,
-            };
-        }
-
-        auto iterator = TRY(arguments[0].value->generate_bytecode(*this)).value();
-        auto next_method = TRY(arguments[1].value->generate_bytecode(*this)).value();
-        auto done = TRY(arguments[2].value->generate_bytecode(*this)).value();
+        VERIFY(arguments.size() == 3);
+        auto iterator = arguments[0].value->generate_bytecode(*this).value();
+        auto next_method = arguments[1].value->generate_bytecode(*this).value();
+        auto done = arguments[2].value->generate_bytecode(*this).value();
 
         emit<Op::CreateAsyncFromSyncIterator>(dst, iterator, next_method, done);
-        return {};
+        return;
     }
 
     if (operation_name == "ToLength"sv) {
-        if (arguments.size() != 1) {
-            return CodeGenerationError {
-                &builtin_identifier,
-                "ToLength only accepts exactly one argument"sv,
-            };
-        }
-
-        auto value = TRY(arguments[0].value->generate_bytecode(*this)).value();
+        VERIFY(arguments.size() == 1);
+        auto value = arguments[0].value->generate_bytecode(*this).value();
         emit<Op::ToLength>(dst, value);
-        return {};
+        return;
     }
 
     if (operation_name == "NewTypeError"sv) {
-        if (arguments.size() != 1) {
-            return CodeGenerationError {
-                &builtin_identifier,
-                "NewTypeError only accepts one argument"sv,
-            };
-        }
-
+        VERIFY(arguments.size() == 1);
         auto const* message = as_if<StringLiteral>(*arguments[0].value);
-        if (!message) {
-            return CodeGenerationError {
-                &builtin_identifier,
-                "new_type_error's message must be a string literal"sv,
-            };
-        }
+        VERIFY(message);
 
         auto message_string = intern_string(message->value());
         emit<Op::NewTypeError>(dst, message_string);
-        return {};
+        return;
     }
 
     if (operation_name == "NewArrayWithLength"sv) {
-        if (arguments.size() != 1) {
-            return CodeGenerationError {
-                &builtin_identifier,
-                "NewArrayWithLength only accepts one argument"sv,
-            };
-        }
-
-        auto length = TRY(arguments[0].value->generate_bytecode(*this)).value();
+        VERIFY(arguments.size() == 1);
+        auto length = arguments[0].value->generate_bytecode(*this).value();
         emit<Op::NewArrayWithLength>(dst, length);
-        return {};
+        return;
     }
 
     if (operation_name == "CreateDataPropertyOrThrow"sv) {
-        if (arguments.size() != 3) {
-            return CodeGenerationError {
-                &builtin_identifier,
-                "CreateDataPropertyOrThrow only accepts three arguments"sv,
-            };
-        }
-
-        auto object = TRY(arguments[0].value->generate_bytecode(*this)).value();
-        auto property = TRY(arguments[1].value->generate_bytecode(*this)).value();
-        auto value = TRY(arguments[2].value->generate_bytecode(*this)).value();
+        VERIFY(arguments.size() == 3);
+        auto object = arguments[0].value->generate_bytecode(*this).value();
+        auto property = arguments[1].value->generate_bytecode(*this).value();
+        auto value = arguments[2].value->generate_bytecode(*this).value();
         emit<Op::CreateDataPropertyOrThrow>(object, property, value);
-        return {};
+        return;
     }
 
 #define __JS_ENUMERATE(snake_name, functionName, length)                                                     \
@@ -1724,7 +1786,7 @@ CodeGenerationErrorOr<void> Generator::generate_builtin_abstract_operation(Ident
         Vector<ScopedOperand> argument_operands;                                                             \
         argument_operands.ensure_capacity(arguments.size());                                                 \
         for (auto const& argument : arguments) {                                                             \
-            auto argument_value = TRY(argument.value->generate_bytecode(*this)).value();                     \
+            auto argument_value = argument.value->generate_bytecode(*this).value();                          \
             argument_operands.unchecked_append(copy_if_needed_to_preserve_evaluation_order(argument_value)); \
         }                                                                                                    \
         emit_with_extra_operand_slots<Bytecode::Op::Call>(                                                   \
@@ -1734,19 +1796,15 @@ CodeGenerationErrorOr<void> Generator::generate_builtin_abstract_operation(Ident
             add_constant(js_undefined()),                                                                    \
             intern_string(builtin_identifier.string().to_utf16_string()),                                    \
             argument_operands);                                                                              \
-        return {};                                                                                           \
+        return;                                                                                              \
     }
     JS_ENUMERATE_NATIVE_JAVASCRIPT_BACKED_ABSTRACT_OPERATIONS
 #undef __JS_ENUMERATE
 
-    dbgln("Unknown builtin abstract operation: '{}'", operation_name);
-    return CodeGenerationError {
-        &builtin_identifier,
-        "Unknown builtin abstract operation"sv,
-    };
+    VERIFY_NOT_REACHED();
 }
 
-CodeGenerationErrorOr<Optional<ScopedOperand>> Generator::maybe_generate_builtin_constant(Identifier const& builtin_identifier)
+Optional<ScopedOperand> Generator::maybe_generate_builtin_constant(Identifier const& builtin_identifier)
 {
     auto const& constant_name = builtin_identifier.string();
 
@@ -1777,11 +1835,7 @@ CodeGenerationErrorOr<Optional<ScopedOperand>> Generator::maybe_generate_builtin
         return add_constant(Value(MAX_ARRAY_LIKE_INDEX));
     }
 
-    dbgln("Unknown builtin constant: '{}'", constant_name);
-    return CodeGenerationError {
-        &builtin_identifier,
-        "Unknown builtin constant"sv,
-    };
+    VERIFY_NOT_REACHED();
 }
 
 }

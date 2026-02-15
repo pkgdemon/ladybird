@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <LibGfx/Font/FontVariant.h>
+#include <LibWeb/DOM/ShadowRoot.h>
 #include <LibWeb/HTML/FormAssociatedElement.h>
 #include <LibWeb/Layout/BreakNode.h>
 #include <LibWeb/Layout/InlineFormattingContext.h>
@@ -263,6 +263,7 @@ Optional<InlineLevelIterator::Item> InlineLevelIterator::generate_next_item()
                 m_text_node_context->next_chunk_index = 1;
             } else {
                 m_text_node_context = {};
+                m_previous_chunk_can_break_after = false;
                 skip_to_next();
                 return generate_next_item();
             }
@@ -329,8 +330,7 @@ Optional<InlineLevelIterator::Item> InlineLevelIterator::generate_next_item()
             x = tab_stop_dist.to_float();
         }
 
-        auto shape_features = text_node->computed_values().font_features();
-        auto glyph_run = Gfx::shape_text({ x, 0 }, letter_spacing.to_float(), chunk.view, chunk.font, text_type, shape_features);
+        auto glyph_run = Gfx::shape_text({ x, 0 }, letter_spacing.to_float(), chunk.view, chunk.font, text_type);
 
         CSSPixels chunk_width = CSSPixels::nearest_value_for(glyph_run->width() + x);
 
@@ -346,7 +346,10 @@ Optional<InlineLevelIterator::Item> InlineLevelIterator::generate_next_item()
             .length_in_node = chunk.length,
             .width = chunk_width,
             .is_collapsible_whitespace = collapse_whitespace && chunk.is_all_whitespace && !is_generated_empty_string,
+            .can_break_before = m_previous_chunk_can_break_after,
         };
+
+        m_previous_chunk_can_break_after = chunk.can_break_after;
 
         add_extra_box_model_metrics_to_item(item, is_first_chunk, is_last_chunk);
         return item;
@@ -387,12 +390,6 @@ Optional<InlineLevelIterator::Item> InlineLevelIterator::generate_next_item()
     if (!is<Layout::Box>(*m_current_node)) {
         skip_to_next();
         return generate_next_item();
-    }
-
-    if (is<Layout::ReplacedBox>(*m_current_node)) {
-        auto const& replaced_box = static_cast<Layout::ReplacedBox const&>(*m_current_node);
-        // FIXME: This const_cast is gross.
-        const_cast<Layout::ReplacedBox&>(replaced_box).prepare_for_replaced_layout();
     }
 
     auto const& box = as<Layout::Box>(*m_current_node);

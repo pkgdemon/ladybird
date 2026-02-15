@@ -20,14 +20,6 @@ op ArrayAppend < Instruction
     m_is_spread: bool
 endop
 
-op AsyncIteratorClose < Instruction
-    m_iterator_object: Operand
-    m_iterator_next: Operand
-    m_iterator_done: Operand
-    m_completion_type: Completion::Type
-    m_completion_value: Optional<Value>
-endop
-
 op Await < Instruction
     @terminator
     @nothrow
@@ -53,6 +45,16 @@ op BitwiseOr < Instruction
 endop
 
 op ToInt32 < Instruction
+    m_dst: Operand
+    m_value: Operand
+endop
+
+op ToString < Instruction
+    m_dst: Operand
+    m_value: Operand
+endop
+
+op ToPrimitiveWithStringHint < Instruction
     m_dst: Operand
     m_value: Operand
 endop
@@ -137,12 +139,6 @@ op ConcatString < Instruction
     m_src: Operand
 endop
 
-op ContinuePendingUnwind < Instruction
-    @terminator
-    @nothrow
-    m_resume_target: Label
-endop
-
 op CopyObjectExcludingProperties < Instruction
     m_length: u32
     m_dst: Operand
@@ -174,7 +170,8 @@ endop
 
 op CreateLexicalEnvironment < Instruction
     @nothrow
-    m_dst: Optional<Operand>
+    m_dst: Operand
+    m_parent: Operand
     m_capacity: u32
 endop
 
@@ -223,23 +220,9 @@ op DeleteById < Instruction
     m_property: PropertyKeyTableIndex
 endop
 
-op DeleteByIdWithThis < Instruction
-    m_dst: Operand
-    m_base: Operand
-    m_this_value: Operand
-    m_property: PropertyKeyTableIndex
-endop
-
 op DeleteByValue < Instruction
     m_dst: Operand
     m_base: Operand
-    m_property: Operand
-endop
-
-op DeleteByValueWithThis < Instruction
-    m_dst: Operand
-    m_base: Operand
-    m_this_value: Operand
     m_property: Operand
 endop
 
@@ -261,13 +244,8 @@ op End < Instruction
 endop
 
 op EnterObjectEnvironment < Instruction
+    m_dst: Operand
     m_object: Operand
-endop
-
-op EnterUnwindContext < Instruction
-    @terminator
-    @nothrow
-    m_entry_point: Label
 endop
 
 op Exp < Instruction
@@ -327,6 +305,11 @@ op GetGlobal < Instruction
 endop
 
 op GetImportMeta < Instruction
+    @nothrow
+    m_dst: Operand
+endop
+
+op GetLexicalEnvironment < Instruction
     @nothrow
     m_dst: Operand
 endop
@@ -467,7 +450,7 @@ op IteratorClose < Instruction
     m_iterator_next: Operand
     m_iterator_done: Operand
     m_completion_type: Completion::Type
-    m_completion_value: Optional<Value>
+    m_completion_value: Operand
 endop
 
 op IteratorNext < Instruction
@@ -608,19 +591,7 @@ op JumpUndefined < Instruction
     m_false_target: Label
 endop
 
-op LeaveFinally < Instruction
-    @nothrow
-endop
-
-op LeaveLexicalEnvironment < Instruction
-    @nothrow
-endop
-
 op LeavePrivateEnvironment < Instruction
-    @nothrow
-endop
-
-op LeaveUnwindContext < Instruction
     @nothrow
 endop
 
@@ -689,7 +660,8 @@ op NewClass < Instruction
     m_length: u32
     m_dst: Operand
     m_super_class: Optional<Operand>
-    m_class_expression: ClassExpression const&
+    m_class_environment: Operand
+    m_class_blueprint_index: u32
     m_lhs_name: Optional<IdentifierTableIndex>
     m_element_keys_count: u32
     m_element_keys: Optional<Operand>[]
@@ -698,7 +670,7 @@ endop
 op NewFunction < Instruction
     @nothrow
     m_dst: Operand
-    m_function_node: FunctionNode const&
+    m_shared_function_data_index: u32
     m_lhs_name: Optional<IdentifierTableIndex>
     m_home_object: Optional<Operand>
 endop
@@ -736,16 +708,16 @@ op NewTypeError < Instruction
     m_error_string: StringTableIndex
 endop
 
+op NewReferenceError < Instruction
+    @nothrow
+    m_dst: Operand
+    m_error_string: StringTableIndex
+endop
+
 op Not < Instruction
     @nothrow
     m_dst: Operand
     m_src: Operand
-endop
-
-op PrepareYield < Instruction
-    @nothrow
-    m_dest: Operand
-    m_value: Operand
 endop
 
 op PostfixDecrement < Instruction
@@ -926,10 +898,6 @@ endop
 op ResolveThisBinding < Instruction
 endop
 
-op RestoreScheduledJump < Instruction
-    @nothrow
-endop
-
 op Return < Instruction
     @terminator
     @nothrow
@@ -942,12 +910,6 @@ op RightShift < Instruction
     m_rhs: Operand
 endop
 
-op ScheduleJump < Instruction
-    @terminator
-    @nothrow
-    m_target: Label
-endop
-
 op SetCompletionType < Instruction
     @nothrow
     m_completion: Operand
@@ -958,6 +920,11 @@ op SetGlobal < Instruction
     m_identifier: IdentifierTableIndex
     m_src: Operand
     m_cache_index: u32
+endop
+
+op SetLexicalEnvironment < Instruction
+    @nothrow
+    m_environment: Operand
 endop
 
 op SetLexicalBinding < Instruction
@@ -1011,6 +978,9 @@ endop
 
 op ThrowIfTDZ < Instruction
     m_src: Operand
+endop
+
+op ThrowConstAssignment < Instruction
 endop
 
 op ToBoolean < Instruction

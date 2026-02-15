@@ -59,6 +59,8 @@ class JS_API Shape final : public Cell {
     GC_DECLARE_ALLOCATOR(Shape);
 
 public:
+    static constexpr bool OVERRIDES_FINALIZE = true;
+
     virtual ~Shape() override;
 
     enum class TransitionType : u8 {
@@ -75,8 +77,7 @@ public:
     [[nodiscard]] GC::Ref<Shape> create_configure_transition(PropertyKey const&, PropertyAttributes attributes);
     [[nodiscard]] GC::Ref<Shape> create_prototype_transition(Object* new_prototype);
     [[nodiscard]] GC::Ref<Shape> create_delete_transition(PropertyKey const&);
-    [[nodiscard]] GC::Ref<Shape> create_cacheable_dictionary_transition();
-    [[nodiscard]] GC::Ref<Shape> create_uncacheable_dictionary_transition();
+    [[nodiscard]] GC::Ref<Shape> create_dictionary_transition();
     [[nodiscard]] GC::Ref<Shape> clone_for_prototype();
 
     void add_property_without_transition(PropertyKey const&, PropertyAttributes);
@@ -84,10 +85,7 @@ public:
     void remove_property_without_transition(PropertyKey const&, u32 offset);
     void set_property_attributes_without_transition(PropertyKey const&, PropertyAttributes);
 
-    [[nodiscard]] bool is_cacheable() const { return m_cacheable; }
     [[nodiscard]] bool is_dictionary() const { return m_dictionary; }
-    [[nodiscard]] bool is_cacheable_dictionary() const { return m_dictionary && m_cacheable; }
-    [[nodiscard]] bool is_uncacheable_dictionary() const { return m_dictionary && !m_cacheable; }
 
     [[nodiscard]] u32 dictionary_generation() const { return m_dictionary_generation; }
 
@@ -117,6 +115,7 @@ private:
     void invalidate_prototype_if_needed_for_change_without_transition();
     void invalidate_all_prototype_chains_leading_to_this();
 
+    virtual void finalize() override;
     virtual void visit_edges(Visitor&) override;
 
     [[nodiscard]] GC::Ptr<Shape> get_or_prune_cached_forward_transition(TransitionKey const&);
@@ -129,7 +128,6 @@ private:
     TransitionType m_transition_type { TransitionType::Invalid };
 
     bool m_dictionary : 1 { false };
-    bool m_cacheable : 1 { true };
     bool m_is_prototype_shape : 1 { false };
 
     GC::Ref<Realm> m_realm;

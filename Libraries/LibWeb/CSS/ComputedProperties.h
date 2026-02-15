@@ -17,6 +17,7 @@
 #include <LibJS/Heap/Cell.h>
 #include <LibWeb/CSS/ComputedValues.h>
 #include <LibWeb/CSS/EasingFunction.h>
+#include <LibWeb/CSS/FontFeatureData.h>
 #include <LibWeb/CSS/LengthBox.h>
 #include <LibWeb/CSS/PropertyID.h>
 #include <LibWeb/CSS/PseudoClass.h>
@@ -88,12 +89,7 @@ public:
     Size size_value(PropertyID) const;
     [[nodiscard]] Variant<LengthPercentage, NormalGap> gap_value(PropertyID) const;
     Length length(PropertyID) const;
-    enum class ClampNegativeLengths {
-        No,
-        Yes,
-    };
-    Optional<LengthPercentage> length_percentage(PropertyID, Layout::NodeWithStyle const&, ClampNegativeLengths) const;
-    LengthBox length_box(PropertyID left_id, PropertyID top_id, PropertyID right_id, PropertyID bottom_id, Layout::NodeWithStyle const&, ClampNegativeLengths, LengthPercentageOrAuto const& default_value) const;
+    LengthBox length_box(PropertyID left_id, PropertyID top_id, PropertyID right_id, PropertyID bottom_id, LengthPercentageOrAuto const& default_value) const;
     Color color_or_fallback(PropertyID, ColorResolutionContext, Color fallback) const;
     HashMap<PropertyID, StyleValueVector> assemble_coordinated_value_list(PropertyID base_property_id, Vector<PropertyID> const& property_ids) const;
     ColorInterpolation color_interpolation() const;
@@ -165,7 +161,7 @@ public:
     BoxSizing box_sizing() const;
     PointerEvents pointer_events() const;
     Variant<VerticalAlign, LengthPercentage> vertical_align() const;
-    Gfx::ShapeFeatures font_features() const;
+    FontFeatureData font_feature_data() const;
     Optional<Gfx::FontVariantAlternates> font_variant_alternates() const;
     FontVariantCaps font_variant_caps() const;
     Optional<Gfx::FontVariantEastAsian> font_variant_east_asian() const;
@@ -175,7 +171,7 @@ public:
     FontVariantPosition font_variant_position() const;
     FontKerning font_kerning() const;
     Optional<FlyString> font_language_override() const;
-    HashMap<StringView, u8> font_feature_settings() const;
+    HashMap<FlyString, u8> font_feature_settings() const;
     HashMap<FlyString, double> font_variation_settings() const;
     GridTrackSizeList grid_auto_columns() const;
     GridTrackSizeList grid_auto_rows() const;
@@ -212,8 +208,9 @@ public:
         AnimationFillMode fill_mode;
         AnimationComposition composition;
         FlyString name;
+        GC::Ptr<Animations::AnimationTimeline> timeline;
     };
-    Vector<AnimationProperties> animations() const;
+    Vector<AnimationProperties> animations(DOM::AbstractElement const&) const;
     Vector<TransitionProperties> transitions() const;
 
     Display display_before_box_type_transformation() const;
@@ -233,6 +230,7 @@ public:
     MaskType mask_type() const;
     float stop_opacity() const;
     float fill_opacity() const;
+    Vector<Variant<LengthPercentage, float>> stroke_dasharray() const;
     StrokeLinecap stroke_linecap() const;
     StrokeLinejoin stroke_linejoin() const;
     double stroke_miterlimit() const;
@@ -256,6 +254,7 @@ public:
     double font_weight() const;
     Percentage font_width() const;
     int font_slope() const;
+    FontOpticalSizing font_optical_sizing() const;
 
     bool operator==(ComputedProperties const&) const;
 

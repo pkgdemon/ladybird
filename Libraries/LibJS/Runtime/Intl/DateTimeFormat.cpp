@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2025, Tim Flynn <trflynn89@ladybird.org>
+ * Copyright (c) 2021-2026, Tim Flynn <trflynn89@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -71,27 +71,27 @@ static Optional<Unicode::DateTimeFormat const&> get_or_create_formatter(StringVi
 
 Optional<Unicode::DateTimeFormat const&> DateTimeFormat::temporal_plain_date_formatter()
 {
-    return get_or_create_formatter(m_icu_locale, m_temporal_time_zone, m_temporal_plain_date_formatter, m_temporal_plain_date_format);
+    return get_or_create_formatter(m_icu_locale, "GMT+00:00"sv, m_temporal_plain_date_formatter, m_temporal_plain_date_format);
 }
 
 Optional<Unicode::DateTimeFormat const&> DateTimeFormat::temporal_plain_year_month_formatter()
 {
-    return get_or_create_formatter(m_icu_locale, m_temporal_time_zone, m_temporal_plain_year_month_formatter, m_temporal_plain_year_month_format);
+    return get_or_create_formatter(m_icu_locale, "GMT+00:00"sv, m_temporal_plain_year_month_formatter, m_temporal_plain_year_month_format);
 }
 
 Optional<Unicode::DateTimeFormat const&> DateTimeFormat::temporal_plain_month_day_formatter()
 {
-    return get_or_create_formatter(m_icu_locale, m_temporal_time_zone, m_temporal_plain_month_day_formatter, m_temporal_plain_month_day_format);
+    return get_or_create_formatter(m_icu_locale, "GMT+00:00"sv, m_temporal_plain_month_day_formatter, m_temporal_plain_month_day_format);
 }
 
 Optional<Unicode::DateTimeFormat const&> DateTimeFormat::temporal_plain_time_formatter()
 {
-    return get_or_create_formatter(m_icu_locale, m_temporal_time_zone, m_temporal_plain_time_formatter, m_temporal_plain_time_format);
+    return get_or_create_formatter(m_icu_locale, "GMT+00:00"sv, m_temporal_plain_time_formatter, m_temporal_plain_time_format);
 }
 
 Optional<Unicode::DateTimeFormat const&> DateTimeFormat::temporal_plain_date_time_formatter()
 {
-    return get_or_create_formatter(m_icu_locale, m_temporal_time_zone, m_temporal_plain_date_time_formatter, m_temporal_plain_date_time_format);
+    return get_or_create_formatter(m_icu_locale, "GMT+00:00"sv, m_temporal_plain_date_time_formatter, m_temporal_plain_date_time_format);
 }
 
 Optional<Unicode::DateTimeFormat const&> DateTimeFormat::temporal_instant_formatter()
@@ -100,25 +100,25 @@ Optional<Unicode::DateTimeFormat const&> DateTimeFormat::temporal_instant_format
 }
 
 // 11.5.5 FormatDateTimePattern ( dateTimeFormat, patternParts, x, rangeFormatOptions ), https://tc39.es/ecma402/#sec-formatdatetimepattern
-// 15.9.4 FormatDateTimePattern ( dateTimeFormat, format, pattern, x, epochNanoseconds ), https://tc39.es/proposal-temporal/#sec-formatdatetimepattern
+// 15.6.4 FormatDateTimePattern ( dateTimeFormat, format, pattern, epochNanoseconds, isPlain ), https://tc39.es/proposal-temporal/#sec-formatdatetimepattern
 Vector<Unicode::DateTimeFormat::Partition> format_date_time_pattern(ValueFormat const& format_record)
 {
     return format_record.formatter.format_to_parts(format_record.epoch_milliseconds);
 }
 
 // 11.5.6 PartitionDateTimePattern ( dateTimeFormat, x ), https://tc39.es/ecma402/#sec-partitiondatetimepattern
-// 15.9.5 PartitionDateTimePattern ( dateTimeFormat, x ), https://tc39.es/proposal-temporal/#sec-partitiondatetimepattern
+// 15.6.5 PartitionDateTimePattern ( dateTimeFormat, x ), https://tc39.es/proposal-temporal/#sec-partitiondatetimepattern
 ThrowCompletionOr<Vector<Unicode::DateTimeFormat::Partition>> partition_date_time_pattern(VM& vm, DateTimeFormat& date_time_format, FormattableDateTime const& time)
 {
     // 1. Let xFormatRecord be ? HandleDateTimeValue(dateTimeFormat, x).
     auto format_record = TRY(handle_date_time_value(vm, date_time_format, time));
 
-    // 5. Let result be ? FormatDateTimePattern(dateTimeFormat, format, pattern, xFormatRecord.[[EpochNanoseconds]]).
+    // 5. Let result be FormatDateTimePattern(dateTimeFormat, format, pattern, epochNanoseconds, formatRecord.[[IsPlain]]).
     return format_date_time_pattern(format_record);
 }
 
 // 11.5.7 FormatDateTime ( dateTimeFormat, x ), https://tc39.es/ecma402/#sec-formatdatetime
-// 15.9.6 FormatDateTime ( dateTimeFormat, x ), https://tc39.es/proposal-temporal/#sec-formatdatetime
+// 15.6.6 FormatDateTime ( dateTimeFormat, x ), https://tc39.es/proposal-temporal/#sec-formatdatetime
 ThrowCompletionOr<Utf16String> format_date_time(VM& vm, DateTimeFormat& date_time_format, FormattableDateTime const& time)
 {
     // 1. Let parts be ? PartitionDateTimePattern(dateTimeFormat, x).
@@ -138,7 +138,7 @@ ThrowCompletionOr<Utf16String> format_date_time(VM& vm, DateTimeFormat& date_tim
 }
 
 // 11.5.8 FormatDateTimeToParts ( dateTimeFormat, x ), https://tc39.es/ecma402/#sec-formatdatetimetoparts
-// 15.9.7 FormatDateTimeToParts ( dateTimeFormat, x ), https://tc39.es/proposal-temporal/#sec-formatdatetimetoparts
+// 15.6.7 FormatDateTimeToParts ( dateTimeFormat, x ), https://tc39.es/proposal-temporal/#sec-formatdatetimetoparts
 ThrowCompletionOr<GC::Ref<Array>> format_date_time_to_parts(VM& vm, DateTimeFormat& date_time_format, FormattableDateTime const& time)
 {
     auto& realm = *vm.current_realm();
@@ -175,7 +175,7 @@ ThrowCompletionOr<GC::Ref<Array>> format_date_time_to_parts(VM& vm, DateTimeForm
 }
 
 // 11.5.9 PartitionDateTimeRangePattern ( dateTimeFormat, x, y ), https://tc39.es/ecma402/#sec-partitiondatetimerangepattern
-// 15.9.8 PartitionDateTimeRangePattern ( dateTimeFormat, x, y ), https://tc39.es/proposal-temporal/#sec-partitiondatetimerangepattern
+// 15.6.8 PartitionDateTimeRangePattern ( dateTimeFormat, x, y ), https://tc39.es/proposal-temporal/#sec-partitiondatetimerangepattern
 ThrowCompletionOr<Vector<Unicode::DateTimeFormat::Partition>> partition_date_time_range_pattern(VM& vm, DateTimeFormat& date_time_format, FormattableDateTime const& start, FormattableDateTime const& end)
 {
     // 1. If IsTemporalObject(x) is true or IsTemporalObject(y) is true, then
@@ -195,7 +195,7 @@ ThrowCompletionOr<Vector<Unicode::DateTimeFormat::Partition>> partition_date_tim
 }
 
 // 11.5.10 FormatDateTimeRange ( dateTimeFormat, x, y ), https://tc39.es/ecma402/#sec-formatdatetimerange
-// 15.9.9 FormatDateTimeRange ( dateTimeFormat, x, y ), https://tc39.es/proposal-temporal/#sec-formatdatetimerange
+// 15.6.9 FormatDateTimeRange ( dateTimeFormat, x, y ), https://tc39.es/proposal-temporal/#sec-formatdatetimerange
 ThrowCompletionOr<Utf16String> format_date_time_range(VM& vm, DateTimeFormat& date_time_format, FormattableDateTime const& start, FormattableDateTime const& end)
 {
     // 1. Let parts be ? PartitionDateTimeRangePattern(dateTimeFormat, x, y).
@@ -225,7 +225,7 @@ ThrowCompletionOr<Utf16String> format_date_time_range(VM& vm, DateTimeFormat& da
 }
 
 // 11.5.11 FormatDateTimeRangeToParts ( dateTimeFormat, x, y ), https://tc39.es/ecma402/#sec-formatdatetimerangetoparts
-// 15.9.10 FormatDateTimeRangeToParts ( dateTimeFormat, x, y ), https://tc39.es/proposal-temporal/#sec-formatdatetimerangetoparts
+// 15.6.10 FormatDateTimeRangeToParts ( dateTimeFormat, x, y ), https://tc39.es/proposal-temporal/#sec-formatdatetimerangetoparts
 ThrowCompletionOr<GC::Ref<Array>> format_date_time_range_to_parts(VM& vm, DateTimeFormat& date_time_format, FormattableDateTime const& start, FormattableDateTime const& end)
 {
     auto& realm = *vm.current_realm();
@@ -264,7 +264,7 @@ ThrowCompletionOr<GC::Ref<Array>> format_date_time_range_to_parts(VM& vm, DateTi
     return result;
 }
 
-// 15.9.1 GetDateTimeFormat ( formats, matcher, options, required, defaults, inherit ), https://tc39.es/proposal-temporal/#sec-getdatetimeformat
+// 15.6.1 GetDateTimeFormat ( formats, matcher, options, required, defaults, inherit ), https://tc39.es/proposal-temporal/#sec-getdatetimeformat
 Optional<Unicode::CalendarPattern> get_date_time_format(Unicode::CalendarPattern const& options, OptionRequired required, OptionDefaults defaults, OptionInherit inherit)
 {
     using enum Unicode::CalendarPattern::Field;
@@ -353,7 +353,7 @@ Optional<Unicode::CalendarPattern> get_date_time_format(Unicode::CalendarPattern
             format_options.era = options.era;
         }
 
-        // c. If required is TIME or ANY, then
+        // c. If required is either TIME or ANY, then
         if (required == OptionRequired::Time || required == OptionRequired::Any) {
             // i. Set formatOptions.[[hourCycle]] to options.[[hourCycle]].
             format_options.hour_cycle = options.hour_cycle;
@@ -428,28 +428,49 @@ Optional<Unicode::CalendarPattern> get_date_time_format(Unicode::CalendarPattern
     return format_options;
 }
 
-// 15.9.2 AdjustDateTimeStyleFormat ( formats, baseFormat, matcher, allowedOptions ), https://tc39.es/proposal-temporal/#sec-adjustdatetimestyleformat
-Unicode::CalendarPattern adjust_date_time_style_format(Unicode::CalendarPattern const& base_format, ReadonlySpan<Unicode::CalendarPattern::Field> allowed_options)
+// 15.6.2 AdjustDateTimeStyleFormat ( formats, baseFormat, matcher, allowedOptions ), https://tc39.es/proposal-temporal/#sec-adjustdatetimestyleformat
+Unicode::CalendarPattern adjust_date_time_style_format(VM& vm, Unicode::CalendarPattern& base_format, ReadonlySpan<Unicode::CalendarPattern::Field> allowed_options)
 {
-    // 1. Let formatOptions be a new Record.
+    // 1. Let anyConflictingFields be false.
+    auto any_conflicted_fields = false;
+
+    // 2. For each row of Table 16, except the header row, in table order, do
+    MUST(for_each_calendar_field(vm, base_format, [&](auto option_type, auto& option, auto const&, auto const&) -> ThrowCompletionOr<void> {
+        // a. Let prop be the name given in the "Property" column of the current row.
+        // b. If baseFormat has a [[<prop>]] field and allowedOptions does not contain prop, set anyConflictingFields to true.
+        if (option.has_value() && !allowed_options.contains_slow(option_type))
+            any_conflicted_fields = true;
+        return {};
+    }));
+
+    // 3. If anyConflictingFields is false, return baseFormat.
+    if (!any_conflicted_fields)
+        return base_format;
+
+    // 4. NOTE: The above steps prevent the operation from returning an altered format when baseFormat would be sufficient.
+    //    This should be unnecessary, but exists because the ECMA-402 specification does not guarantee that a format
+    //    returned from DateTimeStyleFormat can also be returned from BasicFormatMatcher or BestFitFormatMatcher.
+
+    // 5. Let formatOptions be a new Record.
     Unicode::CalendarPattern format_options;
 
-    // 2. For each field name fieldName of allowedOptions, do
+    // 6. For each property name prop of allowedOptions, do
     base_format.for_each_calendar_field_zipped_with(format_options, allowed_options, [&](auto const& base_option, auto& format_option) {
-        // a. Set the field of formatOptions whose name is fieldName to the value of the field of baseFormat whose name is fieldName.
-        format_option = base_option;
+        // a. If baseFormat has a [[<prop>]] field, set formatOptions.[[<prop>]] to baseFormat.[[<prop>]].
+        if (base_option.has_value())
+            format_option = base_option;
         return IterationDecision::Continue;
     });
 
-    // 3. If matcher is "basic", then
+    // 7. If matcher is "basic", then
     //     a. Let bestFormat be BasicFormatMatcher(formatOptions, formats).
-    // 4. Else,
+    // 8. Else,
     //     a. Let bestFormat be BestFitFormatMatcher(formatOptions, formats).
-    // 5. Return bestFormat.
+    // 9. Return bestFormat.
     return format_options;
 }
 
-// 15.9.11 ToDateTimeFormattable ( value ), https://tc39.es/proposal-temporal/#sec-todatetimeformattable
+// 15.6.11 ToDateTimeFormattable ( value ), https://tc39.es/proposal-temporal/#sec-todatetimeformattable
 ThrowCompletionOr<FormattableDateTime> to_date_time_formattable(VM& vm, Value value)
 {
     // 1. If IsTemporalObject(value) is true, return value.
@@ -476,20 +497,18 @@ ThrowCompletionOr<FormattableDateTime> to_date_time_formattable(VM& vm, Value va
     return FormattableDateTime { TRY(value.to_number(vm)).as_double() };
 }
 
-// 15.9.12 IsTemporalObject ( value ), https://tc39.es/proposal-temporal/#sec-temporal-istemporalobject
+// 15.6.12 IsTemporalObject ( value ), https://tc39.es/proposal-temporal/#sec-temporal-istemporalobject
 bool is_temporal_object(FormattableDateTime const& value)
 {
-    // 1. If value is not an Object, then
-    //     a. Return false.
+    // 1. If value is not an Object, return false.
     // 2. If value does not have an [[InitializedTemporalDate]], [[InitializedTemporalTime]], [[InitializedTemporalDateTime]],
     //    [[InitializedTemporalZonedDateTime]], [[InitializedTemporalYearMonth]], [[InitializedTemporalMonthDay]], or
-    //    [[InitializedTemporalInstant]] internal slot, then
-    //     a. Return false.
+    //    [[InitializedTemporalInstant]] internal slot, return false.
     // 3. Return true.
     return !value.has<double>();
 }
 
-// 15.9.13 SameTemporalType ( x, y ), https://tc39.es/proposal-temporal/#sec-temporal-istemporalobject
+// 15.6.13 SameTemporalType ( x, y ), https://tc39.es/proposal-temporal/#sec-temporal-istemporalobject
 bool same_temporal_type(FormattableDateTime const& x, FormattableDateTime const& y)
 {
     // 1. If either of IsTemporalObject(x) or IsTemporalObject(y) is false, return false.
@@ -512,18 +531,18 @@ static double to_epoch_milliseconds(Crypto::SignedBigInteger const& epoch_nanose
     return big_floor(epoch_nanoseconds, Temporal::NANOSECONDS_PER_MILLISECOND).to_double();
 }
 
-// 15.9.15 HandleDateTimeTemporalDate ( dateTimeFormat, temporalDate ), https://tc39.es/proposal-temporal/#sec-temporal-handledatetimetemporaldate
+// 15.6.15 HandleDateTimeTemporalDate ( dateTimeFormat, temporalDate ), https://tc39.es/proposal-temporal/#sec-temporal-handledatetimetemporaldate
 ThrowCompletionOr<ValueFormat> handle_date_time_temporal_date(VM& vm, DateTimeFormat& date_time_format, Temporal::PlainDate const& temporal_date)
 {
-    // 1. If temporalDate.[[Calendar]] is not dateTimeFormat.[[Calendar]] or "iso8601", throw a RangeError exception.
+    // 1. If temporalDate.[[Calendar]] is not either dateTimeFormat.[[Calendar]] or "iso8601", throw a RangeError exception.
     if (!temporal_date.calendar().is_one_of(date_time_format.calendar(), "iso8601"sv))
         return vm.throw_completion<RangeError>(ErrorType::IntlTemporalInvalidCalendar, "Temporal.PlainDate"sv, temporal_date.calendar(), date_time_format.calendar());
 
     // 2. Let isoDateTime be CombineISODateAndTimeRecord(temporalDate.[[ISODate]], NoonTimeRecord()).
     auto iso_date_time = Temporal::combine_iso_date_and_time_record(temporal_date.iso_date(), Temporal::noon_time_record());
 
-    // 3. Let epochNs be ? GetEpochNanosecondsFor(dateTimeFormat.[[TimeZone]], isoDateTime, COMPATIBLE).
-    auto epoch_nanoseconds = TRY(Temporal::get_epoch_nanoseconds_for(vm, date_time_format.time_zone(), iso_date_time, Temporal::Disambiguation::Compatible));
+    // 3. Let epochNs be GetUTCEpochNanoseconds(isoDateTime).
+    auto epoch_nanoseconds = get_utc_epoch_nanoseconds(iso_date_time);
 
     // 4. Let format be dateTimeFormat.[[TemporalPlainDateFormat]].
     auto formatter = date_time_format.temporal_plain_date_formatter();
@@ -532,24 +551,22 @@ ThrowCompletionOr<ValueFormat> handle_date_time_temporal_date(VM& vm, DateTimeFo
     if (!formatter.has_value())
         return vm.throw_completion<TypeError>(ErrorType::IntlTemporalFormatIsNull, "Temporal.PlainDate"sv);
 
-    // 6. Return Value Format Record { [[Format]]: format, [[EpochNanoseconds]]: epochNs  }.
+    // 6. Return Value Format Record { [[Format]]: format, [[EpochNanoseconds]]: epochNs, [[IsPlain]]: true  }.
     return ValueFormat { .formatter = *formatter, .epoch_milliseconds = to_epoch_milliseconds(epoch_nanoseconds) };
 }
 
-// 15.9.16 HandleDateTimeTemporalYearMonth ( dateTimeFormat, temporalYearMonth ), https://tc39.es/proposal-temporal/#sec-temporal-handledatetimetemporalyearmonth
+// 15.6.16 HandleDateTimeTemporalYearMonth ( dateTimeFormat, temporalYearMonth ), https://tc39.es/proposal-temporal/#sec-temporal-handledatetimetemporalyearmonth
 ThrowCompletionOr<ValueFormat> handle_date_time_temporal_year_month(VM& vm, DateTimeFormat& date_time_format, Temporal::PlainYearMonth const& temporal_year_month)
 {
-    // 1. If temporalYearMonth.[[Calendar]] is not equal to dateTimeFormat.[[Calendar]], then
-    if (temporal_year_month.calendar() != date_time_format.calendar()) {
-        // a. Throw a RangeError exception.
+    // 1. If temporalYearMonth.[[Calendar]] is not equal to dateTimeFormat.[[Calendar]], throw a RangeError exception.
+    if (temporal_year_month.calendar() != date_time_format.calendar())
         return vm.throw_completion<RangeError>(ErrorType::IntlTemporalInvalidCalendar, "Temporal.PlainYearMonth"sv, temporal_year_month.calendar(), date_time_format.calendar());
-    }
 
     // 2. Let isoDateTime be CombineISODateAndTimeRecord(temporalYearMonth.[[ISODate]], NoonTimeRecord()).
     auto iso_date_time = Temporal::combine_iso_date_and_time_record(temporal_year_month.iso_date(), Temporal::noon_time_record());
 
-    // 3. Let epochNs be ? GetEpochNanosecondsFor(dateTimeFormat.[[TimeZone]], isoDateTime, COMPATIBLE).
-    auto epoch_nanoseconds = TRY(Temporal::get_epoch_nanoseconds_for(vm, date_time_format.time_zone(), iso_date_time, Temporal::Disambiguation::Compatible));
+    // 3. Let epochNs be GetUTCEpochNanoseconds(isoDateTime).
+    auto epoch_nanoseconds = get_utc_epoch_nanoseconds(iso_date_time);
 
     // 4. Let format be dateTimeFormat.[[TemporalPlainYearMonthFormat]].
     auto formatter = date_time_format.temporal_plain_year_month_formatter();
@@ -558,24 +575,22 @@ ThrowCompletionOr<ValueFormat> handle_date_time_temporal_year_month(VM& vm, Date
     if (!formatter.has_value())
         return vm.throw_completion<TypeError>(ErrorType::IntlTemporalFormatIsNull, "Temporal.PlainYearMonth"sv);
 
-    // 6. Return Value Format Record { [[Format]]: format, [[EpochNanoseconds]]: epochNs  }.
+    // 6. Return Value Format Record { [[Format]]: format, [[EpochNanoseconds]]: epochNs, [[IsPlain]]: true  }.
     return ValueFormat { .formatter = *formatter, .epoch_milliseconds = to_epoch_milliseconds(epoch_nanoseconds) };
 }
 
-// 15.9.17 HandleDateTimeTemporalMonthDay ( dateTimeFormat, temporalMonthDay ), https://tc39.es/proposal-temporal/#sec-temporal-handledatetimetemporalmonthday
+// 15.6.17 HandleDateTimeTemporalMonthDay ( dateTimeFormat, temporalMonthDay ), https://tc39.es/proposal-temporal/#sec-temporal-handledatetimetemporalmonthday
 ThrowCompletionOr<ValueFormat> handle_date_time_temporal_month_day(VM& vm, DateTimeFormat& date_time_format, Temporal::PlainMonthDay const& temporal_month_day)
 {
-    // 1. If temporalMonthDay.[[Calendar]] is not equal to dateTimeFormat.[[Calendar]], then
-    if (temporal_month_day.calendar() != date_time_format.calendar()) {
-        // a. Throw a RangeError exception.
+    // 1. If temporalMonthDay.[[Calendar]] is not equal to dateTimeFormat.[[Calendar]], throw a RangeError exception.
+    if (temporal_month_day.calendar() != date_time_format.calendar())
         return vm.throw_completion<RangeError>(ErrorType::IntlTemporalInvalidCalendar, "Temporal.PlainMonthDay"sv, temporal_month_day.calendar(), date_time_format.calendar());
-    }
 
     // 2. Let isoDateTime be CombineISODateAndTimeRecord(temporalMonthDay.[[ISODate]], NoonTimeRecord()).
     auto iso_date_time = Temporal::combine_iso_date_and_time_record(temporal_month_day.iso_date(), Temporal::noon_time_record());
 
-    // 3. Let epochNs be ? GetEpochNanosecondsFor(dateTimeFormat.[[TimeZone]], isoDateTime, COMPATIBLE).
-    auto epoch_nanoseconds = TRY(Temporal::get_epoch_nanoseconds_for(vm, date_time_format.time_zone(), iso_date_time, Temporal::Disambiguation::Compatible));
+    // 3. Let epochNs be GetUTCEpochNanoseconds(isoDateTime).
+    auto epoch_nanoseconds = get_utc_epoch_nanoseconds(iso_date_time);
 
     // 4. Let format be dateTimeFormat.[[TemporalPlainMonthDayFormat]].
     auto formatter = date_time_format.temporal_plain_month_day_formatter();
@@ -584,11 +599,11 @@ ThrowCompletionOr<ValueFormat> handle_date_time_temporal_month_day(VM& vm, DateT
     if (!formatter.has_value())
         return vm.throw_completion<TypeError>(ErrorType::IntlTemporalFormatIsNull, "Temporal.PlainMonthDay"sv);
 
-    // 6. Return Value Format Record { [[Format]]: format, [[EpochNanoseconds]]: epochNs  }.
+    // 6. Return Value Format Record { [[Format]]: format, [[EpochNanoseconds]]: epochNs, [[IsPlain]]: true  }.
     return ValueFormat { .formatter = *formatter, .epoch_milliseconds = to_epoch_milliseconds(epoch_nanoseconds) };
 }
 
-// 15.9.18 HandleDateTimeTemporalTime ( dateTimeFormat, temporalTime ), https://tc39.es/proposal-temporal/#sec-temporal-handledatetimetemporaltime
+// 15.6.18 HandleDateTimeTemporalTime ( dateTimeFormat, temporalTime ), https://tc39.es/proposal-temporal/#sec-temporal-handledatetimetemporaltime
 ThrowCompletionOr<ValueFormat> handle_date_time_temporal_time(VM& vm, DateTimeFormat& date_time_format, Temporal::PlainTime const& temporal_time)
 {
     // 1. Let isoDate be CreateISODateRecord(1970, 1, 1).
@@ -597,8 +612,8 @@ ThrowCompletionOr<ValueFormat> handle_date_time_temporal_time(VM& vm, DateTimeFo
     // 2. Let isoDateTime be CombineISODateAndTimeRecord(isoDate, temporalTime.[[Time]]).
     auto iso_date_time = Temporal::combine_iso_date_and_time_record(iso_date, temporal_time.time());
 
-    // 3. Let epochNs be ? GetEpochNanosecondsFor(dateTimeFormat.[[TimeZone]], isoDateTime, COMPATIBLE).
-    auto epoch_nanoseconds = TRY(Temporal::get_epoch_nanoseconds_for(vm, date_time_format.time_zone(), iso_date_time, Temporal::Disambiguation::Compatible));
+    // 3. Let epochNs be GetUTCEpochNanoseconds(isoDateTime).
+    auto epoch_nanoseconds = get_utc_epoch_nanoseconds(iso_date_time);
 
     // 4. Let format be dateTimeFormat.[[TemporalPlainTimeFormat]].
     auto formatter = date_time_format.temporal_plain_time_formatter();
@@ -607,42 +622,40 @@ ThrowCompletionOr<ValueFormat> handle_date_time_temporal_time(VM& vm, DateTimeFo
     if (!formatter.has_value())
         return vm.throw_completion<TypeError>(ErrorType::IntlTemporalFormatIsNull, "Temporal.PlainTime"sv);
 
-    // 6. Return Value Format Record { [[Format]]: format, [[EpochNanoseconds]]: epochNs  }.
+    // 6. Return Value Format Record { [[Format]]: format, [[EpochNanoseconds]]: epochNs, [[IsPlain]]: true  }.
     return ValueFormat { .formatter = *formatter, .epoch_milliseconds = to_epoch_milliseconds(epoch_nanoseconds) };
 }
 
-// 15.9.19 HandleDateTimeTemporalDateTime ( dateTimeFormat, dateTime ), https://tc39.es/proposal-temporal/#sec-temporal-handledatetimetemporaldatetime
+// 15.6.19 HandleDateTimeTemporalDateTime ( dateTimeFormat, dateTime ), https://tc39.es/proposal-temporal/#sec-temporal-handledatetimetemporaldatetime
 ThrowCompletionOr<ValueFormat> handle_date_time_temporal_date_time(VM& vm, DateTimeFormat& date_time_format, Temporal::PlainDateTime const& date_time)
 {
-    // 1. If dateTime.[[Calendar]] is not "iso8601" and not equal to dateTimeFormat.[[Calendar]], then
-    if (!date_time.calendar().is_one_of(date_time_format.calendar(), "iso8601"sv)) {
-        // a. Throw a RangeError exception.
+    // 1. If dateTime.[[Calendar]] is not "iso8601" and not equal to dateTimeFormat.[[Calendar]], throw a RangeError exception.
+    if (!date_time.calendar().is_one_of(date_time_format.calendar(), "iso8601"sv))
         return vm.throw_completion<RangeError>(ErrorType::IntlTemporalInvalidCalendar, "Temporal.PlainDateTime"sv, date_time.calendar(), date_time_format.calendar());
-    }
 
-    // 2. Let epochNs be ? GetEpochNanosecondsFor(dateTimeFormat.[[TimeZone]], dateTime.[[ISODateTime]], COMPATIBLE).
-    auto epoch_nanoseconds = TRY(Temporal::get_epoch_nanoseconds_for(vm, date_time_format.time_zone(), date_time.iso_date_time(), Temporal::Disambiguation::Compatible));
+    // 2. Let epochNs be GetUTCEpochNanoseconds(dateTime.[[ISODateTime]]).
+    auto epoch_nanoseconds = get_utc_epoch_nanoseconds(date_time.iso_date_time());
 
     // 3. Let format be dateTimeFormat.[[TemporalPlainDateTimeFormat]].
     auto formatter = date_time_format.temporal_plain_date_time_formatter();
     VERIFY(formatter.has_value());
 
-    // 4. Return Value Format Record { [[Format]]: format, [[EpochNanoseconds]]: epochNs  }.
+    // 4. Return Value Format Record { [[Format]]: format, [[EpochNanoseconds]]: epochNs, [[IsPlain]]: true  }.
     return ValueFormat { .formatter = *formatter, .epoch_milliseconds = to_epoch_milliseconds(epoch_nanoseconds) };
 }
 
-// 15.9.20 HandleDateTimeTemporalInstant ( dateTimeFormat, instant ), https://tc39.es/proposal-temporal/#sec-temporal-handledatetimetemporalinstant
+// 15.6.20 HandleDateTimeTemporalInstant ( dateTimeFormat, instant ), https://tc39.es/proposal-temporal/#sec-temporal-handledatetimetemporalinstant
 ValueFormat handle_date_time_temporal_instant(DateTimeFormat& date_time_format, Temporal::Instant const& instant)
 {
     // 1. Let format be dateTimeFormat.[[TemporalInstantFormat]].
     auto formatter = date_time_format.temporal_instant_formatter();
     VERIFY(formatter.has_value());
 
-    // 2. Return Value Format Record { [[Format]]: format, [[EpochNanoseconds]]: instant.[[EpochNanoseconds]]  }.
+    // 2. Return Value Format Record { [[Format]]: format, [[EpochNanoseconds]]: instant.[[EpochNanoseconds]], [[IsPlain]]: false  }.
     return ValueFormat { .formatter = *formatter, .epoch_milliseconds = to_epoch_milliseconds(instant.epoch_nanoseconds()->big_integer()) };
 }
 
-// 15.9.21 HandleDateTimeOthers ( dateTimeFormat, x ), https://tc39.es/proposal-temporal/#sec-temporal-handledatetimeothers
+// 15.6.21 HandleDateTimeOthers ( dateTimeFormat, x ), https://tc39.es/proposal-temporal/#sec-temporal-handledatetimeothers
 ThrowCompletionOr<ValueFormat> handle_date_time_others(VM& vm, DateTimeFormat& date_time_format, double time)
 {
     // 1. Set x to TimeClip(x).
@@ -657,53 +670,46 @@ ThrowCompletionOr<ValueFormat> handle_date_time_others(VM& vm, DateTimeFormat& d
     // 4. Let format be dateTimeFormat.[[DateTimeFormat]].
     auto const& formatter = date_time_format.formatter();
 
-    // 5. Return Value Format Record { [[Format]]: format, [[EpochNanoseconds]]: epochNanoseconds  }.
+    // 5. Return Value Format Record { [[Format]]: format, [[EpochNanoseconds]]: epochNanoseconds, [[IsPlain]]: false  }.
     return ValueFormat { .formatter = formatter, .epoch_milliseconds = time };
 }
 
-// 15.9.22 HandleDateTimeValue ( dateTimeFormat, x ), https://tc39.es/proposal-temporal/#sec-temporal-handledatetimevalue
+// 15.6.22 HandleDateTimeValue ( dateTimeFormat, x ), https://tc39.es/proposal-temporal/#sec-temporal-handledatetimevalue
 ThrowCompletionOr<ValueFormat> handle_date_time_value(VM& vm, DateTimeFormat& date_time_format, FormattableDateTime const& formattable)
 {
     return formattable.visit(
-        // 1. If x is an Object, then
-        // a. If x has an [[InitializedTemporalDate]] internal slot, then
-        [&](GC::Ref<Temporal::PlainDate> temporal_date) {
-            // i. Return ? HandleDateTimeTemporalDate(dateTimeFormat, x).
-            return handle_date_time_temporal_date(vm, date_time_format, temporal_date);
-        },
-        // b. If x has an [[InitializedTemporalYearMonth]] internal slot, then
-        [&](GC::Ref<Temporal::PlainYearMonth> temporal_year_month) {
-            // i. Return ? HandleDateTimeTemporalYearMonth(dateTimeFormat, x).
-            return handle_date_time_temporal_year_month(vm, date_time_format, temporal_year_month);
-        },
-        // c. If x has an [[InitializedTemporalMonthDay]] internal slot, then
-        [&](GC::Ref<Temporal::PlainMonthDay> temporal_month_day) {
-            // i. Return ? HandleDateTimeTemporalMonthDay(dateTimeFormat, x).
-            return handle_date_time_temporal_month_day(vm, date_time_format, temporal_month_day);
-        },
-        // d. If x has an [[InitializedTemporalTime]] internal slot, then
-        [&](GC::Ref<Temporal::PlainTime> temporal_time) {
-            // i. Return ? HandleDateTimeTemporalTime(dateTimeFormat, x).
-            return handle_date_time_temporal_time(vm, date_time_format, temporal_time);
-        },
-        // e. If x has an [[InitializedTemporalDateTime]] internal slot, then
-        [&](GC::Ref<Temporal::PlainDateTime> date_time) {
-            // i. Return ? HandleDateTimeTemporalDateTime(dateTimeFormat, x).
-            return handle_date_time_temporal_date_time(vm, date_time_format, date_time);
-        },
-        // f. If x has an [[InitializedTemporalInstant]] internal slot, then
-        [&](GC::Ref<Temporal::Instant> instant) -> ThrowCompletionOr<ValueFormat> {
-            // i. Return HandleDateTimeTemporalInstant(dateTimeFormat, x).
-            return handle_date_time_temporal_instant(date_time_format, instant);
-        },
-        // g. Assert: x has an [[InitializedTemporalZonedDateTime]] internal slot.
-        [&](GC::Ref<Temporal::ZonedDateTime>) -> ThrowCompletionOr<ValueFormat> {
-            // h. Throw a TypeError exception.
-            return vm.throw_completion<TypeError>(ErrorType::IntlTemporalZonedDateTime);
-        },
-        // 2. Return ? HandleDateTimeOthers(dateTimeFormat, x).
+        // 1. If x is a Number, return ? HandleDateTimeOthers(dateTimeFormat, x).
         [&](double time) {
             return handle_date_time_others(vm, date_time_format, time);
+        },
+        // 2. If x has an [[InitializedTemporalDate]] internal slot, return ? HandleDateTimeTemporalDate(dateTimeFormat, x).
+        [&](GC::Ref<Temporal::PlainDate> temporal_date) {
+            return handle_date_time_temporal_date(vm, date_time_format, temporal_date);
+        },
+        // 3. If x has an [[InitializedTemporalYearMonth]] internal slot, return ? HandleDateTimeTemporalYearMonth(dateTimeFormat, x).
+        [&](GC::Ref<Temporal::PlainYearMonth> temporal_year_month) {
+            return handle_date_time_temporal_year_month(vm, date_time_format, temporal_year_month);
+        },
+        // 4. If x has an [[InitializedTemporalMonthDay]] internal slot, return ? HandleDateTimeTemporalMonthDay(dateTimeFormat, x).
+        [&](GC::Ref<Temporal::PlainMonthDay> temporal_month_day) {
+            return handle_date_time_temporal_month_day(vm, date_time_format, temporal_month_day);
+        },
+        // 5. If x has an [[InitializedTemporalTime]] internal slot, return ? HandleDateTimeTemporalTime(dateTimeFormat, x).
+        [&](GC::Ref<Temporal::PlainTime> temporal_time) {
+            return handle_date_time_temporal_time(vm, date_time_format, temporal_time);
+        },
+        // 6. If x has an [[InitializedTemporalDateTime]] internal slot, return ? HandleDateTimeTemporalDateTime(dateTimeFormat, x).
+        [&](GC::Ref<Temporal::PlainDateTime> date_time) {
+            return handle_date_time_temporal_date_time(vm, date_time_format, date_time);
+        },
+        // 7. If x has an [[InitializedTemporalInstant]] internal slot, return HandleDateTimeTemporalInstant(dateTimeFormat, x).
+        [&](GC::Ref<Temporal::Instant> instant) -> ThrowCompletionOr<ValueFormat> {
+            return handle_date_time_temporal_instant(date_time_format, instant);
+        },
+        // 8. Assert: x has an [[InitializedTemporalZonedDateTime]] internal slot.
+        [&](GC::Ref<Temporal::ZonedDateTime>) -> ThrowCompletionOr<ValueFormat> {
+            // 9. Throw a TypeError exception.
+            return vm.throw_completion<TypeError>(ErrorType::IntlTemporalZonedDateTime);
         });
 }
 

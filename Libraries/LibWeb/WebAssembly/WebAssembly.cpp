@@ -239,7 +239,7 @@ JS::ThrowCompletionOr<NonnullOwnPtr<Wasm::ModuleInstance>> instantiate_module(JS
 
             // 3.2. If o is not an Object, throw a TypeError exception.
             if (!value.is_object())
-                return vm.throw_completion<JS::TypeError>(JS::ErrorType::NotAnObject, value);
+                return vm.throw_completion<JS::TypeError>(JS::ErrorType::IsNotAEvaluatedFrom, value.to_string_without_side_effects(), "Object"_string, MUST(String::formatted("[wasm import object][\"{}\"]", import_name.module)));
             auto const& object = value.as_object();
 
             // 3.3. Let v be ? Get(o, componentName).
@@ -255,6 +255,7 @@ JS::ThrowCompletionOr<NonnullOwnPtr<Wasm::ModuleInstance>> instantiate_module(JS
                     if (!import_.is_function())
                         return vm.throw_completion<LinkError>(JS::ErrorType::IsNotAEvaluatedFrom, import_, "function"_string, MUST(String::formatted("[wasm import object][\"{}\"]", import_name.name)));
                     auto& function = import_.as_function();
+                    auto& function_type = type.function();
 
                     // 3.4.2. If v has a [[FunctionAddress]] internal slot, and therefore is an Exported Function,
                     Optional<Wasm::FunctionAddress> address;
@@ -268,20 +269,20 @@ JS::ThrowCompletionOr<NonnullOwnPtr<Wasm::ModuleInstance>> instantiate_module(JS
                         // 3.4.3.1. Create a host function from v and functype, and let funcaddr be the result.
                         cache.add_imported_object(function);
                         Wasm::HostFunction host_function {
-                            [&](auto&, auto& arguments) -> Wasm::Result {
+                            [&](auto&, auto arguments) -> Wasm::Result {
                                 GC::RootVector<JS::Value> argument_values { vm.heap() };
                                 size_t index = 0;
                                 for (auto& entry : arguments) {
-                                    argument_values.append(to_js_value(vm, entry, type.parameters()[index]));
+                                    argument_values.append(to_js_value(vm, entry, function_type.parameters()[index]));
                                     ++index;
                                 }
 
                                 auto result = TRY_OR_RETURN_TRAP(JS::call(vm, function, JS::js_undefined(), argument_values.span()));
-                                if (type.results().is_empty())
+                                if (function_type.results().is_empty())
                                     return Wasm::Result { Vector<Wasm::Value> {} };
 
-                                if (type.results().size() == 1)
-                                    return Wasm::Result { Vector<Wasm::Value> { TRY_OR_RETURN_TRAP(to_webassembly_value(vm, result, type.results().first())) } };
+                                if (function_type.results().size() == 1)
+                                    return Wasm::Result { Vector<Wasm::Value> { TRY_OR_RETURN_TRAP(to_webassembly_value(vm, result, function_type.results().first())) } };
 
                                 auto method = TRY_OR_RETURN_TRAP(result.get_method(vm, vm.names.iterator));
                                 if (!method)
@@ -289,19 +290,19 @@ JS::ThrowCompletionOr<NonnullOwnPtr<Wasm::ModuleInstance>> instantiate_module(JS
 
                                 auto values = TRY_OR_RETURN_TRAP(JS::iterator_to_list(vm, TRY_OR_RETURN_TRAP(JS::get_iterator_from_method(vm, result, *method))));
 
-                                if (values.size() != type.results().size())
-                                    return Wasm::Trap::from_external_object(vm.throw_completion<JS::TypeError>(ByteString::formatted("Invalid number of return values for multi-value wasm return of {} objects", type.results().size())));
+                                if (values.size() != function_type.results().size())
+                                    return Wasm::Trap::from_external_object(vm.throw_completion<JS::TypeError>(ByteString::formatted("Invalid number of return values for multi-value wasm return of {} objects", function_type.results().size())));
 
                                 Vector<Wasm::Value> wasm_values;
                                 TRY_OR_RETURN_OOM_TRAP(vm, wasm_values.try_ensure_capacity(values.size()));
 
                                 size_t i = 0;
                                 for (auto& value : values)
-                                    wasm_values.append(TRY_OR_RETURN_TRAP(to_webassembly_value(vm, value, type.results()[i++])));
+                                    wasm_values.append(TRY_OR_RETURN_TRAP(to_webassembly_value(vm, value, function_type.results()[i++])));
 
                                 return Wasm::Result { move(wasm_values) };
                             },
-                            type,
+                            function_type,
                             ByteString::formatted("func{}", resolved_imports.size()),
                         };
                         address = cache.abstract_machine().store().allocate(move(host_function));
@@ -418,7 +419,7 @@ JS::ThrowCompletionOr<NonnullOwnPtr<Wasm::ModuleInstance>> instantiate_module(JS
     return instance_result.release_value();
 }
 
-// // https://webassembly.github.io/spec/js-api/#compile-a-webassembly-module
+// https://webassembly.github.io/spec/js-api/#compile-a-webassembly-module
 // https://webassembly.github.io/content-security-policy/js-api/#compile-a-webassembly-module
 JS::ThrowCompletionOr<NonnullRefPtr<CompiledWebAssemblyModule>> compile_a_webassembly_module(JS::VM& vm, ByteBuffer data)
 {
@@ -689,6 +690,7 @@ JS::ThrowCompletionOr<Wasm::Value> to_webassembly_value(JS::VM& vm, JS::Value va
         return Wasm::Value(Wasm::ValueType { Wasm::ValueType::Kind::ExceptionReference });
     case Wasm::ValueType::V128:
         return vm.throw_completion<JS::TypeError>("Cannot convert a vector value to a javascript value"sv);
+    case Wasm::ValueType::TypeUseReference:
     case Wasm::ValueType::UnsupportedHeapReference:
         return vm.throw_completion<JS::TypeError>("Unsupported heap reference"sv);
     }
@@ -709,6 +711,8 @@ Wasm::Value default_webassembly_value(JS::VM& vm, Wasm::ValueType type)
     case Wasm::ValueType::ExternReference:
         return MUST(to_webassembly_value(vm, JS::js_undefined(), type));
     case Wasm::ValueType::ExceptionReference:
+        return Wasm::Value(type);
+    case Wasm::ValueType::TypeUseReference:
         return Wasm::Value(type);
     case Wasm::ValueType::UnsupportedHeapReference:
         return Wasm::Value(type);
@@ -757,6 +761,7 @@ JS::Value to_js_value(JS::VM& vm, Wasm::Value& wasm_value, Wasm::ValueType type)
     }
     case Wasm::ValueType::V128:
     case Wasm::ValueType::ExceptionReference:
+    case Wasm::ValueType::TypeUseReference:
     case Wasm::ValueType::UnsupportedHeapReference:
         VERIFY_NOT_REACHED();
     }

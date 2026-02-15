@@ -21,7 +21,7 @@ public:
 
     virtual ~Selection() override;
 
-    enum class Direction {
+    enum class Direction : u8 {
         Forwards,
         Backwards,
         Directionless,
@@ -81,6 +81,7 @@ private:
     virtual void visit_edges(Cell::Visitor&) override;
 
     void set_range(GC::Ptr<DOM::Range>);
+    void scroll_focus_into_view();
 
     // https://w3c.github.io/selection-api/#dfn-empty
     GC::Ptr<DOM::Range> m_range;

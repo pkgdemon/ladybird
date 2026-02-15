@@ -11,13 +11,13 @@ jobs:
     if: github.repository == 'LadybirdBrowser/ladybird'
     runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
-      - uses: actions/checkout@v6.0.1
+      - uses: actions/checkout@v6.0.2
         with:
           fetch-depth: 0
       - uses: fregante/setup-git-user@v2
       - run: |
           git fetch origin "refs/notes/*:refs/notes/*"
-          curl -fsSLO https://sideshowbarker.github.io/git-gloss/git-gloss && bash ./git-gloss
+          curl -fsSLO https://github.com/gh-tui-tools/git-gloss/raw/refs/heads/main/git-gloss && bash ./git-gloss
           git push origin "refs/notes/*" || true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

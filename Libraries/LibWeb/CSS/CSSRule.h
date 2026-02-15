@@ -34,6 +34,7 @@ public:
         Keyframe = 8,
         Margin = 9,
         Namespace = 10,
+        CounterStyle = 11,
         Supports = 12,
         // AD-HOC: These are not included in the spec, but we need them internally. So, their numbers are arbitrary.
         LayerBlock = 100,
@@ -61,9 +62,9 @@ public:
     // https://drafts.csswg.org/cssom-1/#serialize-a-css-rule
     virtual String serialized() const = 0;
 
-    virtual void dump(StringBuilder&, int indent_levels = 0) const;
+    MUST_UPCALL virtual void dump(StringBuilder&, int indent_levels = 0) const;
 
-    virtual void clear_caches();
+    MUST_UPCALL virtual void clear_caches();
 
 protected:
     CSSRule(JS::Realm&, Type);

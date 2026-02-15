@@ -17,544 +17,10 @@
 #include <AK/UnicodeUtils.h>
 #include <LibJS/Parser.h>
 #include <LibJS/Runtime/RegExpObject.h>
+#include <LibJS/ScopeCollector.h>
 #include <LibRegex/Regex.h>
 
 namespace JS {
-
-class ScopePusher {
-
-    // NOTE: We really only need ModuleTopLevel and NotModuleTopLevel as the only
-    //       difference seems to be in https://tc39.es/ecma262/#sec-static-semantics-varscopeddeclarations
-    //       where ModuleItemList only does the VarScopedDeclaration and not the
-    //       TopLevelVarScopedDeclarations.
-    enum class ScopeLevel {
-        NotTopLevel,
-        ScriptTopLevel,
-        ModuleTopLevel,
-        FunctionTopLevel,
-        StaticInitTopLevel
-    };
-
-public:
-    enum class ScopeType {
-        Function,
-        Program,
-        Block,
-        ForLoop,
-        With,
-        Catch,
-        ClassStaticInit,
-        ClassField,
-        ClassDeclaration,
-    };
-
-private:
-    ScopePusher(Parser& parser, ScopeNode* node, ScopeLevel scope_level, ScopeType type)
-        : m_parser(parser)
-        , m_scope_level(scope_level)
-        , m_type(type)
-    {
-        m_parent_scope = exchange(m_parser.m_state.current_scope_pusher, this);
-        if (type != ScopeType::Function) {
-            VERIFY(node || (m_parent_scope && scope_level == ScopeLevel::NotTopLevel));
-            if (!node)
-                m_node = m_parent_scope->m_node;
-            else
-                m_node = node;
-        }
-
-        if (!is_top_level())
-            m_top_level_scope = m_parent_scope->m_top_level_scope;
-        else
-            m_top_level_scope = this;
-    }
-
-    bool is_top_level()
-    {
-        return m_scope_level != ScopeLevel::NotTopLevel;
-    }
-
-public:
-    static ScopePusher function_scope(Parser& parser, RefPtr<Identifier const> function_name = nullptr)
-    {
-        ScopePusher scope_pusher(parser, nullptr, ScopeLevel::FunctionTopLevel, ScopeType::Function);
-        if (function_name) {
-            scope_pusher.m_bound_names.set(function_name->string());
-        }
-        return scope_pusher;
-    }
-
-    static ScopePusher program_scope(Parser& parser, Program& program)
-    {
-        return ScopePusher(parser, &program, program.type() == Program::Type::Script ? ScopeLevel::ScriptTopLevel : ScopeLevel::ModuleTopLevel, ScopeType::Program);
-    }
-
-    static ScopePusher block_scope(Parser& parser, ScopeNode& node)
-    {
-        return ScopePusher(parser, &node, ScopeLevel::NotTopLevel, ScopeType::Block);
-    }
-
-    static ScopePusher for_loop_scope(Parser& parser, ScopeNode& node)
-    {
-        return ScopePusher(parser, &node, ScopeLevel::NotTopLevel, ScopeType::ForLoop);
-    }
-
-    static ScopePusher with_scope(Parser& parser, ScopeNode& node)
-    {
-        ScopePusher scope_pusher(parser, &node, ScopeLevel::NotTopLevel, ScopeType::With);
-        return scope_pusher;
-    }
-
-    static ScopePusher catch_scope(Parser& parser)
-    {
-        return ScopePusher(parser, nullptr, ScopeLevel::NotTopLevel, ScopeType::Catch);
-    }
-
-    void add_catch_parameter(RefPtr<BindingPattern const> const& pattern, RefPtr<Identifier const> const& parameter)
-    {
-        if (pattern) {
-            // NOTE: Nothing in the callback throws an exception.
-            MUST(pattern->for_each_bound_identifier([&](auto const& identifier) {
-                m_forbidden_var_names.set(identifier.string());
-                m_bound_names.set(identifier.string());
-                m_catch_parameter_names.set(identifier.string());
-            }));
-        } else if (parameter) {
-            m_var_names.set(parameter->string());
-            m_bound_names.set(parameter->string());
-            m_catch_parameter_names.set(parameter->string());
-        }
-    }
-
-    static ScopePusher static_init_block_scope(Parser& parser, ScopeNode& node)
-    {
-        ScopePusher scope_pusher(parser, &node, ScopeLevel::StaticInitTopLevel, ScopeType::ClassStaticInit);
-        return scope_pusher;
-    }
-
-    static ScopePusher class_field_scope(Parser& parser, ScopeNode& node)
-    {
-        ScopePusher scope_pusher(parser, &node, ScopeLevel::NotTopLevel, ScopeType::ClassField);
-        return scope_pusher;
-    }
-
-    static ScopePusher class_declaration_scope(Parser& parser, RefPtr<Identifier const> class_name)
-    {
-        ScopePusher scope_pusher(parser, nullptr, ScopeLevel::NotTopLevel, ScopeType::ClassDeclaration);
-        if (class_name) {
-            scope_pusher.m_bound_names.set(class_name->string());
-        }
-        return scope_pusher;
-    }
-
-    ScopeType type() const { return m_type; }
-
-    void add_declaration(NonnullRefPtr<Declaration const> declaration)
-    {
-        if (declaration->is_lexical_declaration()) {
-            // NOTE: Nothing in the callback throws an exception.
-            MUST(declaration->for_each_bound_identifier([&](auto const& identifier) {
-                auto const& name = identifier.string();
-                if (m_var_names.contains(name) || m_forbidden_lexical_names.contains(name) || m_function_names.contains(name))
-                    throw_identifier_declared(name, declaration);
-
-                if (m_lexical_names.set(name) != AK::HashSetResult::InsertedNewEntry)
-                    throw_identifier_declared(name, declaration);
-            }));
-
-            m_node->add_lexical_declaration(move(declaration));
-        } else if (!declaration->is_function_declaration()) {
-            // NOTE: Nothing in the callback throws an exception.
-            MUST(declaration->for_each_bound_identifier([&](auto const& identifier) {
-                auto const& name = identifier.string();
-                ScopePusher* pusher = this;
-                while (true) {
-                    if (pusher->m_lexical_names.contains(name)
-                        || pusher->m_function_names.contains(name)
-                        || pusher->m_forbidden_var_names.contains(name))
-                        throw_identifier_declared(name, declaration);
-
-                    pusher->m_var_names.set(name);
-                    if (pusher->is_top_level())
-                        break;
-
-                    VERIFY(pusher->m_parent_scope != nullptr);
-                    pusher = pusher->m_parent_scope;
-                }
-                VERIFY(pusher->is_top_level() && pusher->m_node);
-                pusher->m_node->add_var_scoped_declaration(declaration);
-            }));
-
-            VERIFY(m_top_level_scope);
-            m_top_level_scope->m_node->add_var_scoped_declaration(move(declaration));
-        } else {
-            if (m_scope_level != ScopeLevel::NotTopLevel && m_scope_level != ScopeLevel::ModuleTopLevel) {
-                // Only non-top levels and Module don't var declare the top functions
-                // NOTE: Nothing in the callback throws an exception.
-                MUST(declaration->for_each_bound_identifier([&](auto const& identifier) {
-                    m_var_names.set(identifier.string());
-                }));
-                m_node->add_var_scoped_declaration(move(declaration));
-            } else {
-                VERIFY(is<FunctionDeclaration>(*declaration));
-                auto& function_declaration = static_cast<FunctionDeclaration const&>(*declaration);
-                auto function_name = function_declaration.name();
-                if (m_var_names.contains(function_name) || m_lexical_names.contains(function_name))
-                    throw_identifier_declared(function_name, declaration);
-
-                if (function_declaration.kind() != FunctionKind::Normal || m_parser.m_state.strict_mode) {
-                    if (m_function_names.contains(function_name))
-                        throw_identifier_declared(function_name, declaration);
-
-                    m_lexical_names.set(function_name);
-                    m_node->add_lexical_declaration(move(declaration));
-                    return;
-                }
-
-                m_function_names.set(function_name);
-                if (!m_lexical_names.contains(function_name))
-                    m_functions_to_hoist.append(static_ptr_cast<FunctionDeclaration const>(declaration));
-
-                m_node->add_lexical_declaration(move(declaration));
-            }
-        }
-    }
-
-    ScopePusher const* last_function_scope() const
-    {
-        for (auto scope_ptr = this; scope_ptr; scope_ptr = scope_ptr->m_parent_scope) {
-            if (scope_ptr->m_type == ScopeType::Function || scope_ptr->m_type == ScopeType::ClassStaticInit)
-                return scope_ptr;
-        }
-        return nullptr;
-    }
-
-    auto const& function_parameters() const
-    {
-        return *m_function_parameters;
-    }
-
-    ScopePusher* parent_scope() { return m_parent_scope; }
-    ScopePusher const* parent_scope() const { return m_parent_scope; }
-
-    [[nodiscard]] bool has_declaration(Utf16FlyString const& name) const
-    {
-        return m_lexical_names.contains(name) || m_var_names.contains(name) || m_functions_to_hoist.contains([&name](auto& function) { return function->name() == name; });
-    }
-
-    bool contains_direct_call_to_eval() const { return m_contains_direct_call_to_eval; }
-    void set_contains_direct_call_to_eval()
-    {
-        m_contains_direct_call_to_eval = true;
-        m_screwed_by_eval_in_scope_chain = true;
-    }
-    void set_contains_access_to_arguments_object_in_non_strict_mode() { m_contains_access_to_arguments_object_in_non_strict_mode = true; }
-    void set_scope_node(ScopeNode* node) { m_node = node; }
-    void set_function_parameters(NonnullRefPtr<FunctionParameters const> parameters)
-    {
-        m_function_parameters = move(parameters);
-        for (auto& parameter : m_function_parameters->parameters()) {
-            parameter.binding.visit(
-                [&](Identifier const& identifier) {
-                    register_identifier(fixme_launder_const_through_pointer_cast(identifier));
-                    m_function_parameters_candidates_for_local_variables.set(identifier.string());
-                    m_forbidden_lexical_names.set(identifier.string());
-                },
-                [&](NonnullRefPtr<BindingPattern const> const& binding_pattern) {
-                    // NOTE: Nothing in the callback throws an exception.
-                    MUST(binding_pattern->for_each_bound_identifier([&](auto const& identifier) {
-                        m_forbidden_lexical_names.set(identifier.string());
-                    }));
-                });
-        }
-    }
-
-    ~ScopePusher()
-    {
-        VERIFY(is_top_level() || m_parent_scope);
-
-        if (m_parent_scope && !m_function_parameters) {
-            m_parent_scope->m_contains_access_to_arguments_object_in_non_strict_mode |= m_contains_access_to_arguments_object_in_non_strict_mode;
-            m_parent_scope->m_contains_direct_call_to_eval |= m_contains_direct_call_to_eval;
-            m_parent_scope->m_contains_await_expression |= m_contains_await_expression;
-        }
-
-        if (!m_node) {
-            m_parser.m_state.current_scope_pusher = m_parent_scope;
-            return;
-        }
-
-        if (m_parent_scope && (m_contains_direct_call_to_eval || m_screwed_by_eval_in_scope_chain)) {
-            m_parent_scope->m_screwed_by_eval_in_scope_chain = true;
-        }
-
-        for (auto& it : m_identifier_groups) {
-            auto const& identifier_group_name = it.key;
-            auto& identifier_group = it.value;
-
-            if (identifier_group.declaration_kind.has_value()) {
-                for (auto& identifier : identifier_group.identifiers) {
-                    identifier->set_declaration_kind(identifier_group.declaration_kind.value());
-                }
-            }
-
-            Optional<LocalVariable::DeclarationKind> local_variable_declaration_kind;
-            if (is_top_level() && m_var_names.contains(identifier_group_name)) {
-                local_variable_declaration_kind = LocalVariable::DeclarationKind::Var;
-            } else if (m_lexical_names.contains(identifier_group_name)) {
-                local_variable_declaration_kind = LocalVariable::DeclarationKind::LetOrConst;
-            } else if (m_function_names.contains(identifier_group_name)) {
-                local_variable_declaration_kind = LocalVariable::DeclarationKind::Function;
-            }
-
-            if (m_type == ScopeType::Function && !m_is_arrow_function && identifier_group_name == "arguments"sv) {
-                local_variable_declaration_kind = LocalVariable::DeclarationKind::ArgumentsObject;
-            }
-
-            if (m_type == ScopeType::Catch && m_catch_parameter_names.contains(identifier_group_name)) {
-                local_variable_declaration_kind = LocalVariable::DeclarationKind::CatchClauseParameter;
-            }
-
-            bool hoistable_function_declaration = m_functions_to_hoist.contains([&](auto const& function_declaration) {
-                return function_declaration->name() == identifier_group_name;
-            });
-
-            if (m_type == ScopeType::ClassDeclaration && m_bound_names.contains(identifier_group_name)) {
-                // NOTE: Currently, the parser cannot recognize that assigning a named function expression creates a scope with a binding for the function name.
-                //       As a result, function names are not considered as candidates for optimization in global variable access.
-                continue;
-            }
-
-            if (m_type == ScopeType::Function && !m_is_function_declaration && m_bound_names.contains(identifier_group_name)) {
-                // NOTE: Currently parser can't determine that named function expression assignment creates scope with binding for function name so function names are not considered as candidates to be optimized in global variables access
-                identifier_group.might_be_variable_in_lexical_scope_in_named_function_assignment = true;
-            }
-
-            if (m_type == ScopeType::ClassDeclaration) {
-                // NOTE: Class declaration doesn't not have own ScopeNode hence can't contain declaration of any variable
-                local_variable_declaration_kind.clear();
-            }
-
-            bool is_function_parameter = false;
-            if (m_type == ScopeType::Function) {
-                if (!m_contains_access_to_arguments_object_in_non_strict_mode && m_function_parameters_candidates_for_local_variables.contains(identifier_group_name)) {
-                    is_function_parameter = true;
-                } else if (m_forbidden_lexical_names.contains(identifier_group_name)) {
-                    // NOTE: If an identifier is used as a function parameter that cannot be optimized locally or globally, it is simply ignored.
-                    continue;
-                }
-            }
-
-            if (m_type == ScopeType::Function && hoistable_function_declaration) {
-                // NOTE: Hoistable function declarations are currently not optimized into global or local variables, but future improvements may change that.
-                continue;
-            }
-
-            if (m_type == ScopeType::Program) {
-                auto can_use_global_for_identifier = !(identifier_group.used_inside_with_statement || identifier_group.might_be_variable_in_lexical_scope_in_named_function_assignment || m_parser.m_state.initiated_by_eval);
-                if (can_use_global_for_identifier) {
-                    for (auto& identifier : identifier_group.identifiers) {
-                        // Only mark identifiers as global if they are not inside a function scope
-                        // that contains eval() or has eval in its scope chain.
-                        if (!identifier->is_inside_scope_with_eval())
-                            identifier->set_is_global();
-                    }
-                }
-            } else if (local_variable_declaration_kind.has_value() || is_function_parameter) {
-                if (hoistable_function_declaration)
-                    continue;
-
-                if (!identifier_group.captured_by_nested_function && !identifier_group.used_inside_with_statement) {
-                    if (m_screwed_by_eval_in_scope_chain)
-                        continue;
-
-                    auto local_scope = last_function_scope();
-                    if (!local_scope) {
-                        // NOTE: If there is no function scope, we are in a *descendant* of the global program scope.
-                        //       While we cannot make `let` and `const` into locals in the topmost program scope,
-                        //       as that would break expected web behavior where subsequent <script> elements should see
-                        //       lexical bindings created by earlier <script> elements, we *can* promote them in descendant scopes.
-                        //       Of course, global `var` bindings can never be made into locals, as they get hoisted to the topmost program scope.
-                        if (identifier_group.declaration_kind == DeclarationKind::Var)
-                            continue;
-                        // Add these locals to the top-level scope. (We only produce one executable for the entire program
-                        // scope, so that's where the locals have to be stored.)
-                        local_scope = m_top_level_scope;
-                    }
-
-                    if (is_function_parameter) {
-                        auto argument_index = local_scope->m_function_parameters->get_index_of_parameter_name(identifier_group_name);
-                        for (auto& identifier : identifier_group.identifiers)
-                            identifier->set_argument_index(argument_index.value());
-                    } else {
-                        auto local_variable_index = local_scope->m_node->add_local_variable(identifier_group_name, *local_variable_declaration_kind);
-                        for (auto& identifier : identifier_group.identifiers)
-                            identifier->set_local_variable_index(local_variable_index);
-                    }
-                }
-            } else {
-                if (m_function_parameters || m_type == ScopeType::ClassField || m_type == ScopeType::ClassStaticInit) {
-                    // NOTE: Class fields and class static initialization sections implicitly create functions
-                    identifier_group.captured_by_nested_function = true;
-                }
-
-                if (m_type == ScopeType::With)
-                    identifier_group.used_inside_with_statement = true;
-
-                // Mark each identifier individually if it's inside a scope with eval.
-                // This allows per-identifier optimization decisions at Program scope.
-                if (m_contains_direct_call_to_eval || m_screwed_by_eval_in_scope_chain) {
-                    for (auto& identifier : identifier_group.identifiers)
-                        identifier->set_is_inside_scope_with_eval();
-                }
-
-                if (m_parent_scope) {
-                    if (auto maybe_parent_scope_identifier_group = m_parent_scope->m_identifier_groups.get(identifier_group_name); maybe_parent_scope_identifier_group.has_value()) {
-                        maybe_parent_scope_identifier_group.value().identifiers.extend(identifier_group.identifiers);
-                        if (identifier_group.captured_by_nested_function)
-                            maybe_parent_scope_identifier_group.value().captured_by_nested_function = true;
-                        if (identifier_group.used_inside_with_statement)
-                            maybe_parent_scope_identifier_group.value().used_inside_with_statement = true;
-                        if (identifier_group.might_be_variable_in_lexical_scope_in_named_function_assignment)
-                            maybe_parent_scope_identifier_group.value().might_be_variable_in_lexical_scope_in_named_function_assignment = true;
-                    } else {
-                        m_parent_scope->m_identifier_groups.set(identifier_group_name, identifier_group);
-                    }
-                }
-            }
-        }
-
-        for (size_t i = 0; i < m_functions_to_hoist.size(); i++) {
-            auto const& function_declaration = m_functions_to_hoist[i];
-            if (m_lexical_names.contains(function_declaration->name()) || m_forbidden_var_names.contains(function_declaration->name()))
-                continue;
-            if (is_top_level()) {
-                m_node->add_hoisted_function(move(m_functions_to_hoist[i]));
-            } else {
-                if (!m_parent_scope->m_lexical_names.contains(function_declaration->name()) && !m_parent_scope->m_function_names.contains(function_declaration->name()))
-                    m_parent_scope->m_functions_to_hoist.append(move(m_functions_to_hoist[i]));
-            }
-        }
-
-        VERIFY(m_parser.m_state.current_scope_pusher == this);
-        m_parser.m_state.current_scope_pusher = m_parent_scope;
-    }
-
-    void set_contains_await_expression()
-    {
-        m_contains_await_expression = true;
-    }
-
-    bool contains_await_expression() const
-    {
-        return m_contains_await_expression;
-    }
-
-    bool can_have_using_declaration() const
-    {
-        return m_scope_level != ScopeLevel::ScriptTopLevel;
-    }
-
-    void register_identifier(NonnullRefPtr<Identifier> id, Optional<DeclarationKind> declaration_kind = {})
-    {
-        if (auto maybe_identifier_group = m_identifier_groups.get(id->string()); maybe_identifier_group.has_value()) {
-            maybe_identifier_group.value().identifiers.append(id);
-        } else {
-            m_identifier_groups.set(id->string(), IdentifierGroup {
-                                                      .captured_by_nested_function = false,
-                                                      .identifiers = { id },
-                                                      .declaration_kind = declaration_kind,
-                                                  });
-        }
-    }
-
-    bool uses_this() const { return m_uses_this; }
-    bool uses_this_from_environment() const { return m_uses_this_from_environment; }
-
-    void set_uses_this()
-    {
-        auto const* closest_function_scope = last_function_scope();
-        auto uses_this_from_environment = closest_function_scope && closest_function_scope->m_is_arrow_function;
-        for (auto* scope_ptr = this; scope_ptr; scope_ptr = scope_ptr->m_parent_scope) {
-            if (scope_ptr->m_type == ScopeType::Function) {
-                scope_ptr->m_uses_this = true;
-                if (uses_this_from_environment)
-                    scope_ptr->m_uses_this_from_environment = true;
-            }
-        }
-    }
-
-    void set_uses_new_target()
-    {
-        for (auto* scope_ptr = this; scope_ptr; scope_ptr = scope_ptr->m_parent_scope) {
-            if (scope_ptr->m_type == ScopeType::Function) {
-                scope_ptr->m_uses_this = true;
-                scope_ptr->m_uses_this_from_environment = true;
-            }
-        }
-    }
-
-    void set_is_arrow_function()
-    {
-        m_is_arrow_function = true;
-    }
-
-    void set_is_function_declaration()
-    {
-        m_is_function_declaration = true;
-    }
-
-private:
-    void throw_identifier_declared(Utf16FlyString const& name, NonnullRefPtr<Declaration const> const& declaration)
-    {
-        m_parser.syntax_error(MUST(String::formatted("Identifier '{}' already declared", name)), declaration->source_range().start);
-    }
-
-    Parser& m_parser;
-    ScopeNode* m_node { nullptr };
-    ScopeLevel m_scope_level { ScopeLevel::NotTopLevel };
-    ScopeType m_type;
-
-    ScopePusher* m_parent_scope { nullptr };
-    ScopePusher* m_top_level_scope { nullptr };
-
-    HashTable<Utf16FlyString> m_lexical_names;
-    HashTable<Utf16FlyString> m_var_names;
-    HashTable<Utf16FlyString> m_function_names;
-    HashTable<Utf16FlyString> m_catch_parameter_names;
-
-    HashTable<Utf16FlyString> m_forbidden_lexical_names;
-    HashTable<Utf16FlyString> m_forbidden_var_names;
-    Vector<NonnullRefPtr<FunctionDeclaration const>> m_functions_to_hoist;
-
-    HashTable<Utf16FlyString> m_bound_names;
-    HashTable<Utf16FlyString> m_function_parameters_candidates_for_local_variables;
-
-    struct IdentifierGroup {
-        bool captured_by_nested_function { false };
-        bool used_inside_with_statement { false };
-        bool might_be_variable_in_lexical_scope_in_named_function_assignment { false };
-        Vector<NonnullRefPtr<Identifier>> identifiers;
-        Optional<DeclarationKind> declaration_kind;
-    };
-    HashMap<Utf16FlyString, IdentifierGroup> m_identifier_groups;
-
-    RefPtr<FunctionParameters const> m_function_parameters;
-
-    bool m_contains_access_to_arguments_object_in_non_strict_mode { false };
-    bool m_contains_direct_call_to_eval { false };
-    bool m_contains_await_expression { false };
-    bool m_screwed_by_eval_in_scope_chain { false };
-
-    // Function uses this binding from function environment if:
-    // 1. It's an arrow function or establish parent scope for an arrow function
-    // 2. Uses new.target
-    bool m_uses_this_from_environment { false };
-    bool m_uses_this { false };
-    bool m_is_arrow_function { false };
-
-    bool m_is_function_declaration { false };
-};
 
 class OperatorPrecedenceTable {
 public:
@@ -694,6 +160,7 @@ Parser::Parser(Lexer lexer, Program::Type program_type, Optional<EvalInitialStat
     : m_source_code(lexer.source_code())
     , m_state(move(lexer), program_type)
     , m_program_type(program_type)
+    , m_scope_collector(*this)
 {
     if (initial_state_for_eval.has_value()) {
         m_state.initiated_by_eval = true;
@@ -778,12 +245,16 @@ NonnullRefPtr<Program> Parser::parse_program(bool starts_in_strict_mode)
 {
     auto rule_start = push_start();
     auto program = adopt_ref(*new Program({ m_source_code, rule_start.position(), position() }, m_program_type));
-    ScopePusher program_scope = ScopePusher::program_scope(*this, *program);
+    {
+        auto program_scope = scope_collector().open_program_scope(*program);
 
-    if (m_program_type == Program::Type::Script)
-        parse_script(program, starts_in_strict_mode);
-    else
-        parse_module(program);
+        if (m_program_type == Program::Type::Script)
+            parse_script(program, starts_in_strict_mode);
+        else
+            parse_module(program);
+    }
+
+    scope_collector().analyze();
 
     program->set_end_offset({}, position().offset);
     return program;
@@ -838,8 +309,7 @@ void Parser::parse_module(Program& program)
         }
     }
 
-    VERIFY(m_state.current_scope_pusher);
-    if (m_state.current_scope_pusher->contains_await_expression())
+    if (scope_collector().contains_await_expression())
         program.set_has_top_level_await();
 
     for (auto& export_statement : program.exports()) {
@@ -887,7 +357,7 @@ NonnullRefPtr<Declaration const> Parser::parse_declaration()
         return parse_variable_declaration();
     case TokenType::Identifier:
         if (m_state.current_token().original_value() == "using"sv) {
-            if (!m_state.current_scope_pusher->can_have_using_declaration())
+            if (!scope_collector().can_have_using_declaration())
                 syntax_error("'using' not allowed outside of block, for loop or function"_string);
 
             return parse_using_declaration();
@@ -911,7 +381,7 @@ NonnullRefPtr<Statement const> Parser::parse_statement(AllowLabelledFunction all
         return parse_return_statement();
     case TokenType::Var: {
         auto declaration = parse_variable_declaration();
-        m_state.current_scope_pusher->add_declaration(declaration);
+        scope_collector().add_declaration(declaration);
         return declaration;
     }
     case TokenType::For:
@@ -1057,8 +527,8 @@ RefPtr<FunctionExpression const> Parser::try_parse_arrow_function_expression(boo
     FunctionParsingInsights parsing_insights;
     parsing_insights.might_need_arguments_object = false;
     auto function_body_result = [&]() -> RefPtr<FunctionBody const> {
-        ScopePusher function_scope = ScopePusher::function_scope(*this);
-        function_scope.set_is_arrow_function();
+        auto function_scope = scope_collector().open_function_scope();
+        scope_collector().set_is_arrow_function();
 
         if (expect_parens) {
             // We have parens around the function parameters and can re-use the same parsing
@@ -1104,9 +574,9 @@ RefPtr<FunctionExpression const> Parser::try_parse_arrow_function_expression(boo
         if (function_length == -1)
             function_length = parameters->size();
 
-        auto old_labels_in_scope = move(m_state.labels_in_scope);
+        auto old_labels_in_scope = move(m_labels_in_scope);
         ScopeGuard guard([&]() {
-            m_state.labels_in_scope = move(old_labels_in_scope);
+            m_labels_in_scope = move(old_labels_in_scope);
         });
 
         TemporaryChange change(m_state.in_arrow_function_context, true);
@@ -1129,15 +599,15 @@ RefPtr<FunctionExpression const> Parser::try_parse_arrow_function_expression(boo
             // Esprima generates a single "ArrowFunctionExpression"
             // with a "body" property.
             auto return_block = create_ast_node<FunctionBody>({ m_source_code, rule_start.position(), position() });
-            VERIFY(m_state.current_scope_pusher->type() == ScopePusher::ScopeType::Function);
-            m_state.current_scope_pusher->set_scope_node(return_block);
-            m_state.current_scope_pusher->set_function_parameters(*parameters);
+            VERIFY(scope_collector().type() == ScopeRecord::ScopeType::Function);
+            scope_collector().set_scope_node(return_block);
+            scope_collector().set_function_parameters(*parameters);
             auto return_expression = parse_expression(2);
             return_block->append<ReturnStatement const>({ m_source_code, rule_start.position(), position() }, move(return_expression));
             if (m_state.strict_mode)
                 const_cast<FunctionBody&>(*return_block).set_strict_mode();
-            parsing_insights.contains_direct_call_to_eval = m_state.current_scope_pusher->contains_direct_call_to_eval();
-            parsing_insights.uses_this_from_environment = m_state.current_scope_pusher->uses_this_from_environment();
+            parsing_insights.contains_direct_call_to_eval = scope_collector().contains_direct_call_to_eval();
+            parsing_insights.uses_this_from_environment = scope_collector().uses_this_from_environment();
             return return_block;
         }
         // Invalid arrow function body
@@ -1146,8 +616,6 @@ RefPtr<FunctionExpression const> Parser::try_parse_arrow_function_expression(boo
 
     if (function_body_result.is_null())
         return nullptr;
-
-    auto local_variables_names = function_body_result->local_variables_names();
 
     state_rollback_guard.disarm();
     discard_saved_state();
@@ -1171,7 +639,7 @@ RefPtr<FunctionExpression const> Parser::try_parse_arrow_function_expression(boo
     return create_ast_node<FunctionExpression>(
         { m_source_code, rule_start.position(), position() }, nullptr, source_text,
         move(body), move(parameters), function_length, function_kind, body->in_strict_mode(),
-        parsing_insights, move(local_variables_names), /* is_arrow_function */ true);
+        parsing_insights, /* is_arrow_function */ true);
 }
 
 RefPtr<LabelledStatement const> Parser::try_parse_labelled_statement(AllowLabelledFunction allow_function)
@@ -1222,7 +690,7 @@ RefPtr<LabelledStatement const> Parser::try_parse_labelled_statement(AllowLabell
         return {};
     }
 
-    if (m_state.labels_in_scope.contains(identifier))
+    if (m_labels_in_scope.contains(identifier))
         syntax_error(MUST(String::formatted("Label '{}' has already been declared", identifier)));
 
     RefPtr<Statement const> labelled_item;
@@ -1230,10 +698,9 @@ RefPtr<LabelledStatement const> Parser::try_parse_labelled_statement(AllowLabell
     auto is_iteration_statement = false;
 
     if (match(TokenType::Function)) {
-        m_state.labels_in_scope.set(identifier, {});
+        m_labels_in_scope.set(identifier, {});
         auto function_declaration = parse_function_node<FunctionDeclaration>();
-        VERIFY(m_state.current_scope_pusher);
-        m_state.current_scope_pusher->add_declaration(function_declaration);
+        scope_collector().add_declaration(function_declaration);
         if (function_declaration->kind() == FunctionKind::Generator)
             syntax_error("Generator functions cannot be defined in labelled statements"_string);
         if (function_declaration->kind() == FunctionKind::Async)
@@ -1241,7 +708,7 @@ RefPtr<LabelledStatement const> Parser::try_parse_labelled_statement(AllowLabell
 
         labelled_item = move(function_declaration);
     } else {
-        m_state.labels_in_scope.set(identifier, {});
+        m_labels_in_scope.set(identifier, {});
         labelled_item = parse_statement(allow_function);
         // Extract the innermost statement from a potentially nested chain of LabelledStatements.
         auto statement = labelled_item;
@@ -1252,11 +719,11 @@ RefPtr<LabelledStatement const> Parser::try_parse_labelled_statement(AllowLabell
     }
 
     if (!is_iteration_statement) {
-        if (auto entry = m_state.labels_in_scope.find(identifier); entry != m_state.labels_in_scope.end() && entry->value.has_value())
-            syntax_error("labelled continue statement cannot use non iterating statement"_string, m_state.labels_in_scope.get(identifier).value());
+        if (auto entry = m_labels_in_scope.find(identifier); entry != m_labels_in_scope.end() && entry->value.has_value())
+            syntax_error("labelled continue statement cannot use non iterating statement"_string, m_labels_in_scope.get(identifier).value());
     }
 
-    m_state.labels_in_scope.remove(identifier);
+    m_labels_in_scope.remove(identifier);
 
     return create_ast_node<LabelledStatement>({ m_source_code, rule_start.position(), position() }, identifier.view().to_utf8_but_should_be_ported_to_utf16(), labelled_item.release_nonnull());
 }
@@ -1284,8 +751,8 @@ RefPtr<MetaProperty const> Parser::try_parse_new_target_expression()
     state_rollback_guard.disarm();
     discard_saved_state();
 
-    if (m_state.current_scope_pusher)
-        m_state.current_scope_pusher->set_uses_new_target();
+    if (scope_collector().has_current_scope())
+        scope_collector().set_uses_new_target();
 
     return create_ast_node<MetaProperty>({ m_source_code, rule_start.position(), position() }, MetaProperty::Type::NewTarget);
 }
@@ -1370,7 +837,7 @@ NonnullRefPtr<ClassExpression const> Parser::parse_class_expression(bool expect_
         class_name = create_identifier_and_register_in_current_scope({ m_source_code, rule_start.position(), position() }, consume_identifier_reference().fly_string_value());
     }
 
-    ScopePusher class_declaration_scope = ScopePusher::class_declaration_scope(*this, class_name);
+    auto class_declaration_scope = scope_collector().open_class_declaration_scope(class_name);
 
     if (class_name)
         check_identifier_name_for_assignment_validity(class_name->string(), true);
@@ -1379,7 +846,9 @@ NonnullRefPtr<ClassExpression const> Parser::parse_class_expression(bool expect_
 
     if (match(TokenType::Extends)) {
         consume();
-        auto [expression, should_continue_parsing] = parse_primary_expression();
+        auto primary = parse_primary_expression();
+        auto expression = move(primary.result);
+        auto should_continue_parsing = primary.should_continue_parsing_as_expression;
 
         // Basically a (much) simplified parse_secondary_expression().
         for (;;) {
@@ -1568,7 +1037,7 @@ NonnullRefPtr<ClassExpression const> Parser::parse_class_expression(bool expect_
                 TemporaryChange super_property_access_rollback(m_state.allow_super_property_lookup, true);
 
                 {
-                    ScopePusher static_init_scope = ScopePusher::static_init_block_scope(*this, *static_init_block);
+                    auto static_init_scope = scope_collector().open_static_init_scope(*static_init_block);
                     parse_statement_list(static_init_block);
                 }
 
@@ -1635,7 +1104,7 @@ NonnullRefPtr<ClassExpression const> Parser::parse_class_expression(bool expect_
                 TemporaryChange field_initializer_rollback(m_state.in_class_field_initializer, true);
 
                 auto class_scope_node = create_ast_node<BlockStatement>({ m_source_code, rule_start.position(), position() });
-                auto class_field_scope = ScopePusher::class_field_scope(*this, *class_scope_node);
+                auto class_field_scope = scope_collector().open_class_field_scope(*class_scope_node);
                 initializer = parse_expression(2);
             }
 
@@ -1648,6 +1117,7 @@ NonnullRefPtr<ClassExpression const> Parser::parse_class_expression(bool expect_
 
     if (constructor.is_null()) {
         auto constructor_body = create_ast_node<BlockStatement>({ m_source_code, rule_start.position(), position() });
+
         if (!super_class.is_null()) {
             // Set constructor to the result of parsing the source text
             // constructor(... args){ super (...args);}
@@ -1672,7 +1142,7 @@ NonnullRefPtr<ClassExpression const> Parser::parse_class_expression(bool expect_
             constructor = create_ast_node<FunctionExpression>(
                 { m_source_code, rule_start.position(), position() }, class_name, Utf16View {},
                 move(constructor_body), FunctionParameters::create(Vector { FunctionParameter { move(argument_name), nullptr, true } }), 0, FunctionKind::Normal,
-                /* is_strict_mode */ true, parsing_insights, /* local_variables_names */ Vector<LocalVariable> {});
+                /* is_strict_mode */ true, parsing_insights);
         } else {
             FunctionParsingInsights parsing_insights;
             parsing_insights.uses_this_from_environment = true;
@@ -1680,7 +1150,7 @@ NonnullRefPtr<ClassExpression const> Parser::parse_class_expression(bool expect_
             constructor = create_ast_node<FunctionExpression>(
                 { m_source_code, rule_start.position(), position() }, class_name, Utf16View {},
                 move(constructor_body), FunctionParameters::empty(), 0, FunctionKind::Normal,
-                /* is_strict_mode */ true, parsing_insights, /* local_variables_names */ Vector<LocalVariable> {});
+                /* is_strict_mode */ true, parsing_insights);
         }
     }
 
@@ -1743,8 +1213,8 @@ Parser::PrimaryExpressionParseResult Parser::parse_primary_expression()
         return { move(expression) };
     }
     case TokenType::This: {
-        if (m_state.current_scope_pusher)
-            m_state.current_scope_pusher->set_uses_this();
+        if (scope_collector().has_current_scope())
+            scope_collector().set_uses_this();
         consume_and_allow_division();
         return { create_ast_node<ThisExpression>({ m_source_code, rule_start.position(), position() }) };
     }
@@ -1754,8 +1224,8 @@ Parser::PrimaryExpressionParseResult Parser::parse_primary_expression()
         consume();
         if (!m_state.allow_super_property_lookup)
             syntax_error("'super' keyword unexpected here"_string);
-        if (m_state.current_scope_pusher)
-            m_state.current_scope_pusher->set_uses_new_target();
+        if (scope_collector().has_current_scope())
+            scope_collector().set_uses_new_target();
         return { create_ast_node<SuperExpression>({ m_source_code, rule_start.position(), position() }) };
     case TokenType::EscapedKeyword:
         if (match_invalid_escaped_keyword())
@@ -1784,7 +1254,7 @@ Parser::PrimaryExpressionParseResult Parser::parse_primary_expression()
         consume_and_allow_division();
         return { create_ast_node<NullLiteral>({ m_source_code, rule_start.position(), position() }) };
     case TokenType::CurlyOpen:
-        return { parse_object_expression() };
+        return parse_object_expression();
     case TokenType::Async: {
         auto lookahead_token = next_token();
         // No valid async function (arrow or not) can have a line terminator after the async since asi would kick in.
@@ -2019,7 +1489,7 @@ NonnullRefPtr<Expression const> Parser::parse_property_key()
     }
 }
 
-NonnullRefPtr<ObjectExpression const> Parser::parse_object_expression()
+Parser::PrimaryExpressionParseResult Parser::parse_object_expression()
 {
     auto rule_start = push_start();
     consume(TokenType::CurlyOpen);
@@ -2165,16 +1635,18 @@ NonnullRefPtr<ObjectExpression const> Parser::parse_object_expression()
 
     consume(TokenType::CurlyClose);
 
-    if (invalid_object_literal_property_range.has_value()) {
-        size_t object_expression_offset = rule_start.position().offset;
-        VERIFY(!m_state.invalid_property_range_in_object_expression.contains(object_expression_offset));
-        m_state.invalid_property_range_in_object_expression.set(object_expression_offset, invalid_object_literal_property_range->start);
-    }
+    Optional<Position> invalid_property_range;
+    if (invalid_object_literal_property_range.has_value())
+        invalid_property_range = invalid_object_literal_property_range->start;
 
     properties.shrink_to_fit();
-    return create_ast_node<ObjectExpression>(
-        { m_source_code, rule_start.position(), position() },
-        move(properties));
+    return {
+        create_ast_node<ObjectExpression>(
+            { m_source_code, rule_start.position(), position() },
+            move(properties)),
+        true,
+        move(invalid_property_range),
+    };
 }
 
 NonnullRefPtr<ArrayExpression const> Parser::parse_array_expression()
@@ -2310,27 +1782,18 @@ NonnullRefPtr<TemplateLiteral const> Parser::parse_template_literal(bool is_tagg
 NonnullRefPtr<Expression const> Parser::parse_expression(int min_precedence, Associativity associativity, ForbiddenTokens forbidden)
 {
     auto rule_start = push_start();
-    auto [expression, should_continue_parsing] = parse_primary_expression();
+    auto primary = parse_primary_expression();
+    auto expression = move(primary.result);
+    auto should_continue_parsing = primary.should_continue_parsing_as_expression;
     auto check_for_invalid_object_property = [&](auto& expression) {
-        if (is<ObjectExpression>(*expression)) {
-            if (auto start_offset = m_state.invalid_property_range_in_object_expression.get(expression->start_offset()); start_offset.has_value())
-                syntax_error("Invalid property in object literal"_string, start_offset.value());
-        }
+        if (is<ObjectExpression>(*expression) && primary.invalid_object_property_range.has_value())
+            syntax_error("Invalid property in object literal"_string, primary.invalid_object_property_range.value());
     };
-    if (is<Identifier>(*expression) && m_state.current_scope_pusher) {
+    if (is<Identifier>(*expression) && scope_collector().has_current_scope()) {
         auto identifier_instance = static_ptr_cast<Identifier const>(expression);
-        auto function_scope = m_state.current_scope_pusher->last_function_scope();
-        auto function_parent_scope = function_scope ? function_scope->parent_scope() : nullptr;
-        bool has_not_been_declared_as_variable = true;
-        for (auto scope = m_state.current_scope_pusher; scope != function_parent_scope; scope = scope->parent_scope()) {
-            if (scope->has_declaration(identifier_instance->string())) {
-                has_not_been_declared_as_variable = false;
-                break;
-            }
-        }
-
-        if (has_not_been_declared_as_variable && !m_state.strict_mode && identifier_instance->string() == "arguments"sv) {
-            m_state.current_scope_pusher->set_contains_access_to_arguments_object_in_non_strict_mode();
+        if (!scope_collector().has_declaration_in_current_function(identifier_instance->string())
+            && !m_state.strict_mode && identifier_instance->string() == "arguments"sv) {
+            scope_collector().set_contains_access_to_arguments_object_in_non_strict_mode();
         }
     }
 
@@ -2363,14 +1826,6 @@ NonnullRefPtr<Expression const> Parser::parse_expression(int min_precedence, Ass
         syntax_error("'super' keyword unexpected here"_string);
 
     check_for_invalid_object_property(expression);
-
-    if (is<CallExpression>(*expression) && m_state.current_scope_pusher) {
-        auto& callee = static_ptr_cast<CallExpression const>(expression)->callee();
-        if (is<Identifier>(callee) && static_cast<Identifier const&>(callee).string() == "eval"sv) {
-            m_state.current_scope_pusher->set_contains_direct_call_to_eval();
-            m_state.current_scope_pusher->set_uses_this();
-        }
-    }
 
     if (match(TokenType::Comma) && min_precedence <= 1) {
         Vector<NonnullRefPtr<Expression const>> expressions;
@@ -2597,7 +2052,7 @@ RefPtr<BindingPattern const> Parser::synthesize_binding_pattern(Expression const
     Lexer lexer(SourceCode::create(m_state.lexer.filename(), Utf16String::from_utf16(source)), expression.source_range().start.line, expression.source_range().start.column);
     Parser parser { lexer };
 
-    parser.m_state.current_scope_pusher = m_state.current_scope_pusher;
+    parser.m_scope_collector_override = &scope_collector();
     parser.m_state.strict_mode = m_state.strict_mode;
     parser.m_state.allow_super_property_lookup = m_state.allow_super_property_lookup;
     parser.m_state.allow_super_constructor_call = m_state.allow_super_constructor_call;
@@ -2711,7 +2166,17 @@ NonnullRefPtr<Expression const> Parser::parse_call_expression(NonnullRefPtr<Expr
     if (is<SuperExpression>(*lhs))
         return create_ast_node<SuperCall>({ m_source_code, rule_start.position(), position() }, move(arguments));
 
-    return CallExpression::create({ m_source_code, rule_start.position(), position() }, move(lhs), arguments.span(), InvocationStyleEnum::Parenthesized, InsideParenthesesEnum::NotInsideParentheses);
+    auto call_expression = CallExpression::create({ m_source_code, rule_start.position(), position() }, move(lhs), arguments.span(), InvocationStyleEnum::Parenthesized, InsideParenthesesEnum::NotInsideParentheses);
+
+    if (scope_collector().has_current_scope()) {
+        auto& callee = call_expression->callee();
+        if (is<Identifier>(callee) && static_cast<Identifier const&>(callee).string() == "eval"sv) {
+            scope_collector().set_contains_direct_call_to_eval();
+            scope_collector().set_uses_this();
+        }
+    }
+
+    return call_expression;
 }
 
 NonnullRefPtr<NewExpression const> Parser::parse_new_expression()
@@ -2785,7 +2250,7 @@ NonnullRefPtr<AwaitExpression const> Parser::parse_await_expression()
     auto associativity = operator_associativity(TokenType::Await);
     auto argument = parse_expression(precedence, associativity);
 
-    m_state.current_scope_pusher->set_contains_await_expression();
+    scope_collector().set_contains_await_expression();
 
     return create_ast_node<AwaitExpression>({ m_source_code, rule_start.position(), position() }, move(argument));
 }
@@ -2817,8 +2282,7 @@ void Parser::parse_statement_list(ScopeNode& output_node, AllowLabelledFunction 
     while (!done()) {
         if (match_declaration(AllowUsingDeclaration::Yes)) {
             auto declaration = parse_declaration();
-            VERIFY(m_state.current_scope_pusher);
-            m_state.current_scope_pusher->add_declaration(declaration);
+            scope_collector().add_declaration(declaration);
             output_node.append(move(declaration));
         } else if (match_statement()) {
             output_node.append(parse_statement(allow_labelled_functions));
@@ -2836,9 +2300,9 @@ NonnullRefPtr<FunctionBody const> Parser::parse_function_body(NonnullRefPtr<Func
     auto rule_start = push_start();
     auto function_body = create_ast_node<FunctionBody>({ m_source_code, rule_start.position(), position() });
 
-    VERIFY(m_state.current_scope_pusher->type() == ScopePusher::ScopeType::Function);
-    m_state.current_scope_pusher->set_scope_node(function_body);
-    m_state.current_scope_pusher->set_function_parameters(parameters);
+    VERIFY(scope_collector().type() == ScopeRecord::ScopeType::Function);
+    scope_collector().set_scope_node(function_body);
+    scope_collector().set_function_parameters(parameters);
 
     auto has_use_strict = parse_directive(function_body);
     bool previous_strict_mode = m_state.strict_mode;
@@ -2905,10 +2369,10 @@ NonnullRefPtr<FunctionBody const> Parser::parse_function_body(NonnullRefPtr<Func
     }
 
     m_state.strict_mode = previous_strict_mode;
-    VERIFY(m_state.current_scope_pusher->type() == ScopePusher::ScopeType::Function);
-    parsing_insights.contains_direct_call_to_eval = m_state.current_scope_pusher->contains_direct_call_to_eval();
-    parsing_insights.uses_this_from_environment = m_state.current_scope_pusher->uses_this_from_environment();
-    parsing_insights.uses_this = m_state.current_scope_pusher->uses_this();
+    VERIFY(scope_collector().type() == ScopeRecord::ScopeType::Function);
+    parsing_insights.contains_direct_call_to_eval = scope_collector().contains_direct_call_to_eval();
+    parsing_insights.uses_this_from_environment = scope_collector().uses_this_from_environment();
+    parsing_insights.uses_this = scope_collector().uses_this();
     return function_body;
 }
 
@@ -2916,7 +2380,7 @@ NonnullRefPtr<BlockStatement const> Parser::parse_block_statement()
 {
     auto rule_start = push_start();
     auto block = create_ast_node<BlockStatement>({ m_source_code, rule_start.position(), position() });
-    ScopePusher block_scope = ScopePusher::block_scope(*this, block);
+    auto block_scope = scope_collector().open_block_scope(block);
     consume(TokenType::CurlyOpen);
     parse_statement_list(block);
     consume(TokenType::CurlyClose);
@@ -2996,9 +2460,9 @@ NonnullRefPtr<FunctionNodeType> Parser::parse_function_node(u16 parse_options, O
     RefPtr<FunctionParameters const> parameters;
     FunctionParsingInsights parsing_insights;
     auto body = [&] {
-        ScopePusher function_scope = ScopePusher::function_scope(*this, name);
+        auto function_scope = scope_collector().open_function_scope(name);
         if constexpr (IsSame<FunctionNodeType, FunctionDeclaration>)
-            function_scope.set_is_function_declaration();
+            scope_collector().set_is_function_declaration();
 
         consume(TokenType::ParenOpen);
         parameters = parse_formal_parameters(function_length, parse_options);
@@ -3009,9 +2473,9 @@ NonnullRefPtr<FunctionNodeType> Parser::parse_function_node(u16 parse_options, O
 
         TemporaryChange function_context_rollback(m_state.in_function_context, true);
 
-        auto old_labels_in_scope = move(m_state.labels_in_scope);
+        auto old_labels_in_scope = move(m_labels_in_scope);
         ScopeGuard guard([&]() {
-            m_state.labels_in_scope = move(old_labels_in_scope);
+            m_labels_in_scope = move(old_labels_in_scope);
         });
 
         consume(TokenType::CurlyOpen);
@@ -3019,7 +2483,6 @@ NonnullRefPtr<FunctionNodeType> Parser::parse_function_node(u16 parse_options, O
         return parse_function_body(*parameters, function_kind, parsing_insights);
     }();
 
-    auto local_variables_names = body->local_variables_names();
     consume(TokenType::CurlyClose);
 
     auto has_strict_directive = body->in_strict_mode();
@@ -3039,8 +2502,7 @@ NonnullRefPtr<FunctionNodeType> Parser::parse_function_node(u16 parse_options, O
     return create_ast_node<FunctionNodeType>(
         { m_source_code, rule_start.position(), position() },
         name, source_text, move(body), parameters.release_nonnull(), function_length,
-        function_kind, has_strict_directive, parsing_insights,
-        move(local_variables_names));
+        function_kind, has_strict_directive, parsing_insights);
 }
 
 NonnullRefPtr<FunctionParameters const> Parser::parse_formal_parameters(int& function_length, u16 parse_options)
@@ -3249,7 +2711,7 @@ RefPtr<BindingPattern const> Parser::parse_binding_pattern(Parser::AllowDuplicat
                         return {};
                     alias = binding_pattern.release_nonnull();
                 } else if (match_identifier_name()) {
-                    alias = create_identifier_and_register_in_current_scope({ m_source_code, rule_start.position(), position() }, consume().fly_string_value());
+                    alias = create_identifier_and_register_in_current_scope({ m_source_code, rule_start.position(), position() }, consume_identifier().fly_string_value());
                 } else {
                     expected("identifier or binding pattern");
                     return {};
@@ -3532,8 +2994,8 @@ NonnullRefPtr<BreakStatement const> Parser::parse_break_statement()
         if (!m_state.current_token().trivia_contains_line_terminator() && match_identifier()) {
             target_label = consume().fly_string_value();
 
-            auto label = m_state.labels_in_scope.find(target_label.value());
-            if (label == m_state.labels_in_scope.end())
+            auto label = m_labels_in_scope.find(target_label.value());
+            if (label == m_labels_in_scope.end())
                 syntax_error(MUST(String::formatted("Label '{}' not found", target_label.value())));
         }
         consume_or_insert_semicolon();
@@ -3563,8 +3025,8 @@ NonnullRefPtr<ContinueStatement const> Parser::parse_continue_statement()
         auto label_position = position();
         target_label = consume().fly_string_value();
 
-        auto label = m_state.labels_in_scope.find(target_label.value());
-        if (label == m_state.labels_in_scope.end())
+        auto label = m_labels_in_scope.find(target_label.value());
+        if (label == m_labels_in_scope.end())
             syntax_error(MUST(String::formatted("Label '{}' not found or invalid", target_label.value())));
         else
             label->value = label_position;
@@ -3760,7 +3222,7 @@ NonnullRefPtr<SwitchStatement const> Parser::parse_switch_statement()
 
     auto switch_statement = create_ast_node<SwitchStatement>({ m_source_code, rule_start.position(), position() }, move(determinant));
 
-    ScopePusher switch_scope = ScopePusher::block_scope(*this, switch_statement);
+    auto switch_scope = scope_collector().open_block_scope(switch_statement);
 
     auto has_default = false;
     while (match(TokenType::Case) || match(TokenType::Default)) {
@@ -3788,7 +3250,7 @@ NonnullRefPtr<WithStatement const> Parser::parse_with_statement()
     consume(TokenType::ParenClose);
 
     auto with_scope_node = create_ast_node<BlockStatement>({ m_source_code, rule_start.position(), position() });
-    ScopePusher with_scope = ScopePusher::with_scope(*this, with_scope_node);
+    auto with_scope = scope_collector().open_with_scope(with_scope_node);
 
     auto body = parse_statement();
     return create_ast_node<WithStatement>({ m_source_code, rule_start.position(), position() }, move(object), move(body));
@@ -3818,7 +3280,7 @@ NonnullRefPtr<CatchClause const> Parser::parse_catch_clause()
     auto rule_start = push_start();
     consume(TokenType::Catch);
 
-    ScopePusher catch_scope = ScopePusher::catch_scope(*this);
+    auto catch_scope = scope_collector().open_catch_scope();
 
     RefPtr<Identifier const> parameter;
     RefPtr<BindingPattern const> pattern_parameter;
@@ -3856,7 +3318,7 @@ NonnullRefPtr<CatchClause const> Parser::parse_catch_clause()
         bound_names.set(parameter->string());
     }
 
-    catch_scope.add_catch_parameter(pattern_parameter, parameter);
+    scope_collector().add_catch_parameter(pattern_parameter, parameter);
 
     auto body = parse_block_statement();
 
@@ -3898,10 +3360,9 @@ NonnullRefPtr<IfStatement const> Parser::parse_if_statement()
         // compatibility semantics specified in B.3.2.
         VERIFY(match(TokenType::Function));
         auto block = create_ast_node<BlockStatement>({ m_source_code, rule_start.position(), position() });
-        ScopePusher block_scope = ScopePusher::block_scope(*this, *block);
+        auto block_scope = scope_collector().open_block_scope(*block);
         auto declaration = parse_declaration();
-        VERIFY(m_state.current_scope_pusher);
-        block_scope.add_declaration(declaration);
+        scope_collector().add_declaration(declaration);
 
         VERIFY(is<FunctionDeclaration>(*declaration));
         auto& function_declaration = static_cast<FunctionDeclaration const&>(*declaration);
@@ -3941,7 +3402,7 @@ NonnullRefPtr<Statement const> Parser::parse_for_statement()
     auto is_await_loop = IsForAwaitLoop::No;
 
     auto loop_scope_node = create_ast_node<BlockStatement>({ m_source_code, rule_start.position(), position() });
-    ScopePusher for_loop_scope = ScopePusher::for_loop_scope(*this, *loop_scope_node);
+    auto for_loop_scope = scope_collector().open_for_loop_scope(*loop_scope_node);
 
     auto match_of = [&](Token const& token) {
         return token.type() == TokenType::Identifier && token.original_value() == "of"sv;
@@ -3970,8 +3431,6 @@ NonnullRefPtr<Statement const> Parser::parse_for_statement()
     }
 
     consume(TokenType::ParenOpen);
-
-    Optional<ScopePusher> scope_pusher;
 
     RefPtr<ASTNode const> init;
     if (!match(TokenType::Semicolon)) {
@@ -4008,7 +3467,7 @@ NonnullRefPtr<Statement const> Parser::parse_for_statement()
             init = move(declaration);
         } else if (match_variable_declaration()) {
             auto declaration = parse_variable_declaration(IsForLoopVariableDeclaration::Yes);
-            m_state.current_scope_pusher->add_declaration(declaration);
+            scope_collector().add_declaration(declaration);
             if (match_for_in_of()) {
                 if (declaration->declarations().size() > 1)
                     syntax_error("Multiple declarations not allowed in for..in/of"_string);
@@ -4944,7 +4403,7 @@ NonnullRefPtr<ExportStatement const> Parser::parse_export_statement(Program& pro
                 (matches_function == MatchesFunctionDeclaration::WithoutName ? FunctionNodeParseOptions::HasDefaultExportName : 0)
                 | FunctionNodeParseOptions::CheckForFunctionAndName);
 
-            m_state.current_scope_pusher->add_declaration(function_declaration);
+            scope_collector().add_declaration(function_declaration);
             if (matches_function == MatchesFunctionDeclaration::WithoutName)
                 local_name = ExportStatement::local_name_for_default;
             else
@@ -4956,7 +4415,7 @@ NonnullRefPtr<ExportStatement const> Parser::parse_export_statement(Program& pro
             // Attempt to detect classes with names only as those are declarations,
             //   this actually seems to cover all cases already.
             auto class_expression = parse_class_declaration();
-            m_state.current_scope_pusher->add_declaration(class_expression);
+            scope_collector().add_declaration(class_expression);
             local_name = class_expression->name();
             expression = move(class_expression);
 
@@ -5028,7 +4487,7 @@ NonnullRefPtr<ExportStatement const> Parser::parse_export_statement(Program& pro
         } else if (match_declaration()) {
             auto decl_position = position();
             auto declaration = parse_declaration();
-            m_state.current_scope_pusher->add_declaration(declaration);
+            scope_collector().add_declaration(declaration);
             if (is<FunctionDeclaration>(*declaration)) {
                 auto& func = static_cast<FunctionDeclaration const&>(*declaration);
                 entries_with_location.append({ ExportEntry::named_export(func.name(), func.name()), func.source_range().start });
@@ -5057,7 +4516,7 @@ NonnullRefPtr<ExportStatement const> Parser::parse_export_statement(Program& pro
         } else if (match(TokenType::Var)) {
             auto variable_position = position();
             auto variable_declaration = parse_variable_declaration();
-            m_state.current_scope_pusher->add_declaration(variable_declaration);
+            scope_collector().add_declaration(variable_declaration);
             for (auto& decl : variable_declaration->declarations()) {
                 decl->target().visit(
                     [&](NonnullRefPtr<Identifier const> const& identifier) {
@@ -5219,9 +4678,9 @@ template NonnullRefPtr<FunctionDeclaration> Parser::parse_function_node(u16, Opt
 
 NonnullRefPtr<Identifier const> Parser::create_identifier_and_register_in_current_scope(SourceRange range, Utf16FlyString string, Optional<DeclarationKind> declaration_kind)
 {
-    auto id = create_ast_node<Identifier const>(move(range), move(string));
-    if (m_state.current_scope_pusher)
-        m_state.current_scope_pusher->register_identifier(const_cast<Identifier&>(*id), declaration_kind);
+    auto id = create_ast_node<Identifier>(move(range), move(string));
+    if (scope_collector().has_current_scope())
+        scope_collector().register_identifier(id, declaration_kind);
     return id;
 }
 
@@ -5233,13 +4692,15 @@ Parser Parser::parse_function_body_from_string(ByteString const& body_string, u1
     {
         // Set up some parser state to accept things like return await, and yield in the plain function body.
         body_parser.m_state.in_function_context = true;
-        auto function_scope = ScopePusher::function_scope(body_parser);
+        auto function_scope = body_parser.scope_collector().open_function_scope();
         if ((parse_options & FunctionNodeParseOptions::IsAsyncFunction) != 0)
             body_parser.m_state.await_expression_is_valid = true;
         if ((parse_options & FunctionNodeParseOptions::IsGeneratorFunction) != 0)
             body_parser.m_state.in_generator_function_context = true;
         function_body = body_parser.parse_function_body(move(parameters), kind, parsing_insights);
     }
+
+    body_parser.scope_collector().analyze();
 
     return body_parser;
 }

@@ -7,6 +7,7 @@
 #pragma once
 
 #include <AK/HashMap.h>
+#include <AK/NonnullRawPtr.h>
 #include <AK/SourceLocation.h>
 #include <LibHTTP/Header.h>
 #include <LibIPC/ConnectionToServer.h>
@@ -93,7 +94,7 @@ private:
     virtual void did_list_style_sheets(u64 page_id, Vector<Web::CSS::StyleSheetIdentifier> stylesheets) override;
     virtual void did_get_style_sheet_source(u64 page_id, Web::CSS::StyleSheetIdentifier identifier, URL::URL, String source) override;
     virtual void did_take_screenshot(u64 page_id, Gfx::ShareableBitmap screenshot) override;
-    virtual void did_get_internal_page_info(u64 page_id, PageInfoType, String) override;
+    virtual void did_get_internal_page_info(u64 page_id, PageInfoType, Optional<Core::AnonymousBuffer>) override;
     virtual void did_execute_js_console_input(u64 page_id, JsonValue) override;
     virtual void did_output_js_console_message(u64 page_id, ConsoleOutput) override;
     virtual void did_start_network_request(u64 page_id, u64 request_id, URL::URL, ByteString method, Vector<HTTP::Header>, ByteBuffer request_body, Optional<String> initiator_type) override;
@@ -107,12 +108,13 @@ private:
     virtual void did_request_set_prompt_text(u64 page_id, String message) override;
     virtual void did_request_accept_dialog(u64 page_id) override;
     virtual void did_request_dismiss_dialog(u64 page_id) override;
+    virtual void did_request_document_cookie_version_index(u64 page_id, i64 document_id, String domain) override;
     virtual Messages::WebContentClient::DidRequestAllCookiesWebdriverResponse did_request_all_cookies_webdriver(URL::URL) override;
     virtual Messages::WebContentClient::DidRequestAllCookiesCookiestoreResponse did_request_all_cookies_cookiestore(URL::URL) override;
     virtual Messages::WebContentClient::DidRequestNamedCookieResponse did_request_named_cookie(URL::URL, String) override;
-    virtual Messages::WebContentClient::DidRequestCookieResponse did_request_cookie(URL::URL, Web::Cookie::Source) override;
-    virtual void did_set_cookie(URL::URL, Web::Cookie::ParsedCookie, Web::Cookie::Source) override;
-    virtual void did_update_cookie(Web::Cookie::Cookie) override;
+    virtual Messages::WebContentClient::DidRequestCookieResponse did_request_cookie(u64 page_id, URL::URL, HTTP::Cookie::Source) override;
+    virtual void did_set_cookie(URL::URL, HTTP::Cookie::ParsedCookie, HTTP::Cookie::Source) override;
+    virtual void did_update_cookie(HTTP::Cookie::Cookie) override;
     virtual void did_expire_cookies_with_time_offset(AK::Duration) override;
     virtual Messages::WebContentClient::DidRequestStorageItemResponse did_request_storage_item(Web::StorageAPI::StorageEndpointType storage_endpoint, String storage_key, String bottle_key) override;
     virtual Messages::WebContentClient::DidSetStorageItemResponse did_set_storage_item(Web::StorageAPI::StorageEndpointType storage_endpoint, String storage_key, String bottle_key, String value) override;
@@ -150,8 +152,7 @@ private:
 
     Optional<ViewImplementation&> view_for_page_id(u64, SourceLocation = SourceLocation::current());
 
-    // FIXME: Does a HashMap holding references make sense?
-    HashMap<u64, ViewImplementation*> m_views;
+    HashMap<u64, NonnullRawPtr<ViewImplementation>> m_views;
 
     ProcessHandle m_process_handle;
 

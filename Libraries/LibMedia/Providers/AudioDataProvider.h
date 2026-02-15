@@ -37,7 +37,7 @@ public:
     using BlockEndTimeHandler = Function<void(AK::Duration)>;
     using SeekCompletionHandler = Function<void()>;
 
-    static DecoderErrorOr<NonnullRefPtr<AudioDataProvider>> try_create(NonnullRefPtr<Core::WeakEventLoopReference> const& main_thread_event_loop, NonnullRefPtr<Demuxer> const& demuxer, NonnullRefPtr<IncrementallyPopulatedStream> const&, Track const& track);
+    static DecoderErrorOr<NonnullRefPtr<AudioDataProvider>> try_create(NonnullRefPtr<Core::WeakEventLoopReference> const& main_thread_event_loop, NonnullRefPtr<Demuxer> const& demuxer, Track const& track);
     AudioDataProvider(NonnullRefPtr<ThreadData> const&);
     ~AudioDataProvider();
 
@@ -46,6 +46,8 @@ public:
     void set_output_sample_specification(Audio::SampleSpecification);
 
     void start();
+    void suspend();
+    void resume();
 
     AudioBlock retrieve_block();
 
@@ -54,7 +56,7 @@ public:
 private:
     class ThreadData final : public AtomicRefCounted<ThreadData> {
     public:
-        ThreadData(NonnullRefPtr<Core::WeakEventLoopReference> const& main_thread_event_loop, NonnullRefPtr<Demuxer> const&, NonnullRefPtr<IncrementallyPopulatedStream::Cursor> const&, Track const&, NonnullOwnPtr<AudioDecoder>&&, NonnullOwnPtr<Audio::AudioConverter>&&);
+        ThreadData(NonnullRefPtr<Core::WeakEventLoopReference> const& main_thread_event_loop, NonnullRefPtr<Demuxer> const&, Track const&, NonnullOwnPtr<Audio::AudioConverter>&&);
         ~ThreadData();
 
         void set_error_handler(ErrorHandler&&);
@@ -62,10 +64,15 @@ private:
         void set_output_sample_specification(Audio::SampleSpecification);
 
         void start();
+        DecoderErrorOr<void> create_decoder();
+        void suspend();
+        void resume();
         void exit();
 
         void wait_for_start();
+        bool should_thread_exit_while_locked() const;
         bool should_thread_exit() const;
+        bool handle_suspension();
         template<typename Invokee>
         void invoke_on_main_thread_while_locked(Invokee);
         template<typename Invokee>
@@ -92,6 +99,7 @@ private:
         enum class RequestedState : u8 {
             None,
             Running,
+            Suspended,
             Exit,
         };
 
@@ -102,9 +110,9 @@ private:
         RequestedState m_requested_state { RequestedState::None };
 
         NonnullRefPtr<Demuxer> m_demuxer;
-        NonnullRefPtr<IncrementallyPopulatedStream::Cursor> m_stream_cursor;
         Track m_track;
-        NonnullOwnPtr<AudioDecoder> m_decoder;
+        OwnPtr<AudioDecoder> m_decoder;
+        bool m_decoder_needs_keyframe_next_seek { false };
         NonnullOwnPtr<Audio::AudioConverter> m_converter;
         i64 m_last_sample { NumericLimits<i64>::min() };
 

@@ -162,7 +162,12 @@ private:
     virtual void paste(u64 page_id, Utf16String text) override;
 
     virtual void system_time_zone_changed() override;
-    virtual void cookies_changed(Vector<Web::Cookie::Cookie>) override;
+
+    virtual void set_document_cookie_version_buffer(u64 page_id, Core::AnonymousBuffer document_cookie_version_buffer) override;
+    virtual void set_document_cookie_version_index(u64 page_id, i64 document_id, Core::SharedVersionIndex document_index) override;
+    virtual void cookies_changed(u64 page_id, Vector<HTTP::Cookie::Cookie>) override;
+
+    virtual void request_close(u64 page_id) override;
 
     NonnullOwnPtr<PageHost> m_page_host;
 

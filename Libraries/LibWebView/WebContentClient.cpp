@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <LibWeb/Cookie/ParsedCookie.h>
+#include <LibHTTP/Cookie/ParsedCookie.h>
 #include <LibWebView/Application.h>
 #include <LibWebView/CookieJar.h>
 #include <LibWebView/HelperProcess.h>
@@ -30,7 +30,7 @@ WebContentClient::WebContentClient(NonnullOwnPtr<IPC::Transport> transport, View
     : IPC::ConnectionToServer<WebContentClientEndpoint, WebContentServerEndpoint>(*this, move(transport))
 {
     s_clients.set(this);
-    m_views.set(0, &view);
+    m_views.set(0, view);
 }
 
 WebContentClient::WebContentClient(NonnullOwnPtr<IPC::Transport> transport)
@@ -52,13 +52,13 @@ void WebContentClient::die()
 void WebContentClient::assign_view(Badge<Application>, ViewImplementation& view)
 {
     VERIFY(m_views.is_empty());
-    m_views.set(0, &view);
+    m_views.set(0, view);
 }
 
 void WebContentClient::register_view(u64 page_id, ViewImplementation& view)
 {
     VERIFY(page_id > 0);
-    m_views.set(page_id, &view);
+    m_views.set(page_id, view);
 }
 
 void WebContentClient::unregister_view(u64 page_id)
@@ -81,7 +81,7 @@ void WebContentClient::notify_all_views_of_crash()
     Vector<u64> view_ids;
     view_ids.ensure_capacity(m_views.size());
     for (auto& [page_id, view] : m_views)
-        view_ids.append(view->view_id());
+        view_ids.unchecked_append(view->view_id());
 
     for (auto view_id : view_ids) {
         Core::deferred_invoke([view_id] {
@@ -422,7 +422,7 @@ void WebContentClient::did_take_screenshot(u64 page_id, Gfx::ShareableBitmap scr
         view->did_receive_screenshot({}, screenshot);
 }
 
-void WebContentClient::did_get_internal_page_info(u64 page_id, WebView::PageInfoType type, String info)
+void WebContentClient::did_get_internal_page_info(u64 page_id, WebView::PageInfoType type, Optional<Core::AnonymousBuffer> info)
 {
     if (auto view = view_for_page_id(page_id); view.has_value())
         view->did_receive_internal_page_info({}, type, info);
@@ -537,6 +537,14 @@ void WebContentClient::did_change_favicon(u64 page_id, Gfx::ShareableBitmap favi
     }
 }
 
+void WebContentClient::did_request_document_cookie_version_index(u64 page_id, i64 document_id, String domain)
+{
+    if (auto view = view_for_page_id(page_id); view.has_value()) {
+        if (auto document_index = view->ensure_document_cookie_version_index({}, domain); !document_index.is_error())
+            async_set_document_cookie_version_index(page_id, document_id, document_index.value());
+    }
+}
+
 Messages::WebContentClient::DidRequestAllCookiesWebdriverResponse WebContentClient::did_request_all_cookies_webdriver(URL::URL url)
 {
     return Application::cookie_jar().get_all_cookies_webdriver(url);
@@ -552,17 +560,25 @@ Messages::WebContentClient::DidRequestNamedCookieResponse WebContentClient::did_
     return Application::cookie_jar().get_named_cookie(url, name);
 }
 
-Messages::WebContentClient::DidRequestCookieResponse WebContentClient::did_request_cookie(URL::URL url, Web::Cookie::Source source)
+Messages::WebContentClient::DidRequestCookieResponse WebContentClient::did_request_cookie(u64 page_id, URL::URL url, HTTP::Cookie::Source source)
 {
-    return Application::cookie_jar().get_cookie(url, source);
+    HTTP::Cookie::VersionedCookie cookie;
+    cookie.cookie = Application::cookie_jar().get_cookie(url, source);
+
+    if (source == HTTP::Cookie::Source::NonHttp) {
+        if (auto view = view_for_page_id(page_id); view.has_value())
+            cookie.cookie_version = view->document_cookie_version(url);
+    }
+
+    return cookie;
 }
 
-void WebContentClient::did_set_cookie(URL::URL url, Web::Cookie::ParsedCookie cookie, Web::Cookie::Source source)
+void WebContentClient::did_set_cookie(URL::URL url, HTTP::Cookie::ParsedCookie cookie, HTTP::Cookie::Source source)
 {
     Application::cookie_jar().set_cookie(url, cookie, source);
 }
 
-void WebContentClient::did_update_cookie(Web::Cookie::Cookie cookie)
+void WebContentClient::did_update_cookie(HTTP::Cookie::Cookie cookie)
 {
     Application::cookie_jar().update_cookie(cookie);
 }

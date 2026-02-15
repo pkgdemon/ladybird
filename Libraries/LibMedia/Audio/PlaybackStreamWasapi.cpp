@@ -309,7 +309,7 @@ ErrorOr<NonnullRefPtr<PlaybackStream>> PlaybackStreamWASAPI::create(OutputState 
     if (initial_output_state == OutputState::Playing)
         state->playing = true;
 
-    auto audio_thread = Threading::Thread::construct([state] {
+    auto audio_thread = Threading::Thread::construct("Audio Render"sv, [state] {
         return AudioState::render_thread_loop(*state);
     });
 

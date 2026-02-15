@@ -7,7 +7,7 @@
 
 #pragma once
 
-#include <LibGfx/Forward.h>
+#include <LibWeb/Forward.h>
 #include <LibWeb/Painting/PaintableBox.h>
 #include <LibWeb/Painting/PaintableFragment.h>
 
@@ -36,6 +36,7 @@ public:
     static void paint_text_fragment_debug_highlight(DisplayListRecordingContext&, PaintableFragment const&);
 
     [[nodiscard]] virtual TraversalDecision hit_test(CSSPixelPoint position, HitTestType type, Function<TraversalDecision(HitTestResult)> const& callback) const override;
+    [[nodiscard]] TraversalDecision hit_test_fragments(CSSPixelPoint position, CSSPixelPoint local_position, HitTestType type, Function<TraversalDecision(HitTestResult)> const& callback) const;
 
     virtual void visit_edges(Cell::Visitor& visitor) override
     {
@@ -54,6 +55,9 @@ protected:
 
 private:
     [[nodiscard]] virtual bool is_paintable_with_lines() const final { return true; }
+
+    Optional<PaintableFragment const&> fragment_at_position(DOM::Position const&) const;
+    void paint_cursor(DisplayListRecordingContext&) const;
 
     Vector<PaintableFragment> m_fragments;
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2025, Tim Flynn <trflynn89@ladybird.org>
+ * Copyright (c) 2021-2026, Tim Flynn <trflynn89@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -14,9 +14,9 @@
 #include <AK/Traits.h>
 #include <LibCore/Timer.h>
 #include <LibDatabase/Forward.h>
+#include <LibHTTP/Cookie/Cookie.h>
 #include <LibRequests/CacheSizes.h>
 #include <LibURL/Forward.h>
-#include <LibWeb/Cookie/Cookie.h>
 #include <LibWeb/Forward.h>
 #include <LibWebView/Forward.h>
 
@@ -37,14 +37,14 @@ public:
 
     ~CookieJar();
 
-    String get_cookie(URL::URL const& url, Web::Cookie::Source source);
-    void set_cookie(URL::URL const& url, Web::Cookie::ParsedCookie const& parsed_cookie, Web::Cookie::Source source);
-    void update_cookie(Web::Cookie::Cookie);
+    String get_cookie(URL::URL const& url, HTTP::Cookie::Source source);
+    void set_cookie(URL::URL const& url, HTTP::Cookie::ParsedCookie const& parsed_cookie, HTTP::Cookie::Source source);
+    void update_cookie(HTTP::Cookie::Cookie);
     void dump_cookies();
-    Vector<Web::Cookie::Cookie> get_all_cookies();
-    Vector<Web::Cookie::Cookie> get_all_cookies_webdriver(URL::URL const& url);
-    Vector<Web::Cookie::Cookie> get_all_cookies_cookiestore(URL::URL const& url);
-    Optional<Web::Cookie::Cookie> get_named_cookie(URL::URL const& url, StringView name);
+    Vector<HTTP::Cookie::Cookie> get_all_cookies();
+    Vector<HTTP::Cookie::Cookie> get_all_cookies_webdriver(URL::URL const& url);
+    Vector<HTTP::Cookie::Cookie> get_all_cookies_cookiestore(URL::URL const& url);
+    Optional<HTTP::Cookie::Cookie> get_named_cookie(URL::URL const& url, StringView name);
     void expire_cookies_with_time_offset(AK::Duration);
     void expire_cookies_accessed_since(UnixDateTime since);
     Requests::CacheSizes estimate_storage_size_accessed_since(UnixDateTime since) const;
@@ -58,11 +58,11 @@ private:
 
     class WEBVIEW_API TransientStorage {
     public:
-        using Cookies = HashMap<CookieStorageKey, Web::Cookie::Cookie>;
+        using Cookies = HashMap<CookieStorageKey, HTTP::Cookie::Cookie>;
 
         void set_cookies(Cookies);
-        void set_cookie(CookieStorageKey, Web::Cookie::Cookie);
-        Optional<Web::Cookie::Cookie const&> get_cookie(CookieStorageKey const&);
+        void set_cookie(CookieStorageKey, HTTP::Cookie::Cookie);
+        Optional<HTTP::Cookie::Cookie const&> get_cookie(CookieStorageKey const&);
 
         size_t size() const { return m_cookies.size(); }
 
@@ -76,7 +76,7 @@ private:
         template<typename Callback>
         void for_each_cookie(Callback callback)
         {
-            using ReturnType = InvokeResult<Callback, Web::Cookie::Cookie&>;
+            using ReturnType = InvokeResult<Callback, HTTP::Cookie::Cookie&>;
 
             for (auto& it : m_cookies) {
                 if constexpr (IsSame<ReturnType, IterationDecision>) {
@@ -90,12 +90,15 @@ private:
         }
 
     private:
+        using CookieEntry = decltype(declval<Cookies>().take_all_matching(nullptr))::ValueType;
+        static void send_cookie_changed_notifications(ReadonlySpan<CookieEntry>, bool inform_web_view_about_changed_domains = true);
+
         Cookies m_cookies;
         Cookies m_dirty_cookies;
     };
 
     struct WEBVIEW_API PersistedStorage {
-        void insert_cookie(Web::Cookie::Cookie const& cookie);
+        void insert_cookie(HTTP::Cookie::Cookie const& cookie);
         TransientStorage::Cookies select_all_cookies();
 
         Database::Database& database;
@@ -113,8 +116,7 @@ private:
         WebDriver,
     };
 
-    void store_cookie(Web::Cookie::ParsedCookie const& parsed_cookie, URL::URL const& url, String canonicalized_domain, Web::Cookie::Source source);
-    Vector<Web::Cookie::Cookie> get_matching_cookies(URL::URL const& url, StringView canonicalized_domain, Web::Cookie::Source source, MatchingCookiesSpecMode mode = MatchingCookiesSpecMode::RFC6265);
+    Vector<HTTP::Cookie::Cookie> get_matching_cookies(URL::URL const& url, HTTP::Cookie::Source source, MatchingCookiesSpecMode mode = MatchingCookiesSpecMode::RFC6265);
 
     Optional<PersistedStorage> m_persisted_storage;
     TransientStorage m_transient_storage;

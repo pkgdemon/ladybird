@@ -7,8 +7,10 @@
 #pragma once
 
 #include <AK/Function.h>
+#include <AK/Optional.h>
 #include <LibCore/EventLoop.h>
 #include <LibCore/File.h>
+#include <LibMedia/Audio/ChannelMap.h>
 #include <LibMedia/Containers/Matroska/MatroskaDemuxer.h>
 #include <LibMedia/Containers/Matroska/Reader.h>
 #include <LibMedia/Demuxer.h>
@@ -65,21 +67,21 @@ static inline void decode_video(StringView path, size_t expected_frame_count, T 
     VERIFY_NOT_REACHED();
 }
 
-static inline void decode_audio(StringView path, u32 sample_rate, u8 channel_count, size_t expected_sample_count)
+static inline void decode_audio(StringView path, u32 sample_rate, u8 channel_count, size_t expected_sample_count, Optional<Audio::ChannelMap> expected_channel_map = {})
 {
     Core::EventLoop loop;
 
     auto file = MUST(Core::File::open(path, Core::File::OpenMode::Read));
     auto stream = Media::IncrementallyPopulatedStream::create_from_buffer(MUST(file->read_until_eof()));
     auto demuxer = MUST([&] -> Media::DecoderErrorOr<NonnullRefPtr<Media::Demuxer>> {
-        auto matroska_result = Media::Matroska::MatroskaDemuxer::from_stream(stream->create_cursor());
+        auto matroska_result = Media::Matroska::MatroskaDemuxer::from_stream(stream);
         if (!matroska_result.is_error())
             return matroska_result.release_value();
-        return Media::FFmpeg::FFmpegDemuxer::from_stream(stream->create_cursor());
+        return Media::FFmpeg::FFmpegDemuxer::from_stream(stream);
     }());
     auto track = TRY_OR_FAIL(demuxer->get_preferred_track_for_type(Media::TrackType::Audio));
     VERIFY(track.has_value());
-    auto provider = TRY_OR_FAIL(Media::AudioDataProvider::try_create(Core::EventLoop::current_weak(), demuxer, stream, track.release_value()));
+    auto provider = TRY_OR_FAIL(Media::AudioDataProvider::try_create(Core::EventLoop::current_weak(), demuxer, track.release_value()));
 
     auto reached_end = false;
     provider->set_error_handler([&](Media::DecoderError&& error) {
@@ -105,6 +107,8 @@ static inline void decode_audio(StringView path, u32 sample_rate, u8 channel_cou
         } else {
             EXPECT_EQ(block.sample_rate(), sample_rate);
             EXPECT_EQ(block.channel_count(), channel_count);
+            if (expected_channel_map.has_value())
+                EXPECT_EQ(block.sample_specification().channel_map(), expected_channel_map.value());
 
             VERIFY(sample_count == 0 || last_sample <= block.timestamp_in_samples());
             last_sample = block.timestamp_in_samples() + static_cast<i64>(block.sample_count());

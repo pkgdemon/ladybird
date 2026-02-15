@@ -14,13 +14,14 @@
 #include <AK/Time.h>
 #include <AK/Vector.h>
 #include <LibCore/File.h>
+#include <LibHTTP/Cookie/Cookie.h>
+#include <LibHTTP/Cookie/ParsedCookie.h>
 #include <LibJS/Runtime/Value.h>
 #include <LibURL/Parser.h>
 #include <LibWeb/CSS/ComputedProperties.h>
+#include <LibWeb/CSS/CustomPropertyData.h>
 #include <LibWeb/CSS/PropertyNameAndID.h>
 #include <LibWeb/CSS/StyleValues/StyleValue.h>
-#include <LibWeb/Cookie/Cookie.h>
-#include <LibWeb/Cookie/ParsedCookie.h>
 #include <LibWeb/Crypto/Crypto.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/DocumentObserver.h>
@@ -47,6 +48,7 @@
 #include <LibWeb/HTML/SelectedFile.h>
 #include <LibWeb/HTML/TraversableNavigable.h>
 #include <LibWeb/HTML/WindowProxy.h>
+#include <LibWeb/HTML/XMLSerializer.h>
 #include <LibWeb/Page/Page.h>
 #include <LibWeb/Platform/EventLoopPlugin.h>
 #include <LibWeb/Platform/Timer.h>
@@ -80,7 +82,7 @@ namespace WebContent {
     })
 
 // https://w3c.github.io/webdriver/#dfn-serialized-cookie
-static JsonValue serialize_cookie(Web::Cookie::Cookie const& cookie)
+static JsonValue serialize_cookie(HTTP::Cookie::Cookie const& cookie)
 {
     JsonObject serialized_cookie;
     serialized_cookie.set("name"sv, cookie.name);
@@ -91,7 +93,7 @@ static JsonValue serialize_cookie(Web::Cookie::Cookie const& cookie)
     serialized_cookie.set("httpOnly"sv, cookie.http_only);
     if (cookie.persistent)
         serialized_cookie.set("expiry"sv, cookie.expiry_time.seconds_since_epoch()); // Must not be set if omitted when adding a cookie.
-    serialized_cookie.set("sameSite"sv, Web::Cookie::same_site_to_string(cookie.same_site));
+    serialized_cookie.set("sameSite"sv, HTTP::Cookie::same_site_to_string(cookie.same_site));
 
     return serialized_cookie;
 }
@@ -1396,8 +1398,10 @@ Messages::WebDriverClient::GetElementCssValueResponse WebDriverConnection::get_e
             // computed value of parameter URL variables["property name"] from element's style declarations.
             if (auto property = Web::CSS::PropertyNameAndID::from_name(name); property.has_value()) {
                 if (property->is_custom_property()) {
-                    if (auto style_property = element->custom_properties({}).get(property->name()); style_property.has_value())
-                        computed_value = style_property->value->to_string(Web::CSS::SerializationMode::Normal);
+                    if (auto data = element->custom_property_data({}); data) {
+                        if (auto const* style_property = data->get(property->name()))
+                            computed_value = style_property->value->to_string(Web::CSS::SerializationMode::Normal);
+                    }
                 } else if (auto computed_properties = element->computed_properties()) {
                     computed_value = computed_properties->property(property->id()).to_string(Web::CSS::SerializationMode::Normal);
                 }
@@ -2243,7 +2247,7 @@ Web::WebDriver::Response WebDriverConnection::add_cookie_impl(JsonObject const& 
     // NOTE: This validation is either performed in subsequent steps.
 
     // 7. Create a cookie in the cookie store associated with the active document’s address using cookie name name, cookie value value, and an attribute-value list of the following cookie concepts listed in the table for cookie conversion from data:
-    Web::Cookie::ParsedCookie cookie {};
+    HTTP::Cookie::ParsedCookie cookie {};
     cookie.name = TRY(Web::WebDriver::get_property(data, "name"sv));
     cookie.value = TRY(Web::WebDriver::get_property(data, "value"sv));
 
@@ -2262,7 +2266,7 @@ Web::WebDriver::Response WebDriverConnection::add_cookie_impl(JsonObject const& 
 
         // FIXME: Spec issue: We must return InvalidCookieDomain for invalid domains, rather than InvalidArgument.
         // https://github.com/w3c/webdriver/issues/1570
-        if (!Web::Cookie::domain_matches(*cookie.domain, document->domain()))
+        if (!HTTP::Cookie::domain_matches(*cookie.domain, document->domain()))
             return Web::WebDriver::Error::from_code(Web::WebDriver::ErrorCode::InvalidCookieDomain, "Cookie domain does not match document domain"sv);
     }
 
@@ -2287,13 +2291,13 @@ Web::WebDriver::Response WebDriverConnection::add_cookie_impl(JsonObject const& 
     //     The value if the entry exists, otherwise leave unset to indicate that no same site policy is defined.
     if (data.has("sameSite"sv)) {
         auto same_site = TRY(Web::WebDriver::get_property(data, "sameSite"sv));
-        cookie.same_site_attribute = Web::Cookie::same_site_from_string(same_site);
+        cookie.same_site_attribute = HTTP::Cookie::same_site_from_string(same_site);
 
-        if (cookie.same_site_attribute == Web::Cookie::SameSite::Default)
+        if (cookie.same_site_attribute == HTTP::Cookie::SameSite::Default)
             return Web::WebDriver::Error::from_code(Web::WebDriver::ErrorCode::InvalidArgument, "Invalid same-site attribute"sv);
     }
 
-    current_browsing_context().page().client().page_did_set_cookie(document->url(), cookie, Web::Cookie::Source::Http);
+    current_browsing_context().page().client().page_did_set_cookie(document->url(), cookie, HTTP::Cookie::Source::Http);
 
     // If there is an error during this step, return error with error code unable to set cookie.
     // NOTE: This probably should only apply to the actual setting of the cookie in the Browser, which cannot fail in our case.

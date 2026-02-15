@@ -23,16 +23,23 @@ interface Internals {
     const unsigned short MOD_SUPER = 8;
     const unsigned short MOD_KEYPAD = 16;
 
+    const unsigned short BUTTON_LEFT = 0;
+    const unsigned short BUTTON_MIDDLE = 1;
+    const unsigned short BUTTON_RIGHT = 2;
+
     undefined sendText(HTMLElement target, DOMString text, optional unsigned short modifiers = 0);
     undefined sendKey(HTMLElement target, DOMString keyName, optional unsigned short modifiers = 0);
     undefined paste(HTMLElement target, Utf16DOMString text);
     undefined commitText();
 
-    undefined click(double x, double y);
-    undefined doubleclick(double x, double y);
-    undefined middleClick(double x, double y);
-    undefined mouseDown(double x, double y);
-    undefined movePointerTo(double x, double y);
+    // Low-level mouse primitives
+    undefined mouseDown(double x, double y, optional unsigned short button = 0, optional unsigned short modifiers = 0);
+    undefined mouseUp(double x, double y, optional unsigned short button = 0, optional unsigned short modifiers = 0);
+    undefined mouseMove(double x, double y, optional unsigned short modifiers = 0);
+
+    // High-level mouse conveniences
+    undefined click(double x, double y, optional unsigned short clickCount = 1, optional unsigned short button = 0, optional unsigned short modifiers = 0);
+    undefined clickAndHold(double x, double y, optional unsigned short clickCount = 1, optional unsigned short button = 0, optional unsigned short modifiers = 0);
     undefined wheel(double x, double y, double deltaX, double deltaY);
     undefined pinch(double x, double y, double scaleDelta);
 
@@ -58,10 +65,13 @@ interface Internals {
     unsigned short getEchoServerPort();
 
     undefined setBrowserZoom(double factor);
+    undefined setDevicePixelRatio(double ratio);
 
     readonly attribute boolean headless;
 
     DOMString dumpDisplayList();
+    DOMString dumpLayoutTree(Node node);
+    DOMString dumpStackingContextTree();
     DOMString dumpGCGraph();
 
     // Returns the shadow root of the element, if it has one, even if it's not normally accessible to JS.
@@ -69,6 +79,12 @@ interface Internals {
 
     undefined handleSDLInputEvents();
 
+    undefined setEnvironmentsTopLevelURL(USVString url);
+
     InternalGamepad connectVirtualGamepad();
+
+    undefined setHighlightedNode(Node? node);
+
+    undefined clearElement(HTMLElement element);
 
 };

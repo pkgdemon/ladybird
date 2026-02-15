@@ -18,7 +18,7 @@ namespace JS {
 GC_DEFINE_ALLOCATOR(NativeJavaScriptBackedFunction);
 
 // 10.3.3 CreateBuiltinFunction ( behaviour, length, name, additionalInternalSlotsList [ , realm [ , prototype [ , prefix ] ] ] ), https://tc39.es/ecma262/#sec-createbuiltinfunction
-GC::Ref<NativeJavaScriptBackedFunction> NativeJavaScriptBackedFunction::create(Realm& realm, FunctionNode const& function_node, PropertyKey const& name, i32 length)
+GC::Ref<NativeJavaScriptBackedFunction> NativeJavaScriptBackedFunction::create(Realm& realm, GC::Ref<SharedFunctionInstanceData> shared_data, PropertyKey const& name, i32 length)
 {
     // 1. If realm is not present, set realm to the current Realm Record.
     // 2. If prototype is not present, set prototype to realm.[[Intrinsics]].[[%Function.prototype%]].
@@ -32,18 +32,6 @@ GC::Ref<NativeJavaScriptBackedFunction> NativeJavaScriptBackedFunction::create(R
     // 7. Set func.[[Extensible]] to true.
     // 8. Set func.[[Realm]] to realm.
     // 9. Set func.[[InitialName]] to null.
-    auto shared_data = realm.heap().allocate<SharedFunctionInstanceData>(realm.vm(),
-        function_node.kind(),
-        function_node.name(),
-        function_node.function_length(),
-        function_node.parameters(),
-        *function_node.body_ptr(),
-        function_node.source_text(),
-        function_node.is_strict_mode(),
-        function_node.is_arrow_function(),
-        function_node.parsing_insights(),
-        function_node.local_variables_names());
-
     auto function = realm.create<NativeJavaScriptBackedFunction>(shared_data, *prototype);
 
     function->unsafe_set_shape(realm.intrinsics().native_function_shape());
@@ -61,7 +49,7 @@ GC::Ref<NativeJavaScriptBackedFunction> NativeJavaScriptBackedFunction::create(R
     return function;
 }
 
-NativeJavaScriptBackedFunction::NativeJavaScriptBackedFunction(GC::Ref<SharedFunctionInstanceData const> shared_function_instance_data, Object& prototype)
+NativeJavaScriptBackedFunction::NativeJavaScriptBackedFunction(GC::Ref<SharedFunctionInstanceData> shared_function_instance_data, Object& prototype)
     : NativeFunction(shared_function_instance_data->m_name, prototype)
     , m_shared_function_instance_data(shared_function_instance_data)
 {
@@ -73,13 +61,12 @@ void NativeJavaScriptBackedFunction::visit_edges(Visitor& visitor)
     visitor.visit(m_shared_function_instance_data);
 }
 
-ThrowCompletionOr<void> NativeJavaScriptBackedFunction::get_stack_frame_size(size_t& registers_and_locals_count, size_t& constants_count, size_t& argument_count)
+void NativeJavaScriptBackedFunction::get_stack_frame_size(size_t& registers_and_locals_count, size_t& constants_count, size_t& argument_count)
 {
     auto& bytecode_executable = this->bytecode_executable();
     registers_and_locals_count = bytecode_executable.registers_and_locals_count;
     constants_count = bytecode_executable.constants.size();
     argument_count = max(argument_count, m_shared_function_instance_data->m_function_length);
-    return {};
 }
 
 ThrowCompletionOr<Value> NativeJavaScriptBackedFunction::call()
@@ -111,7 +98,8 @@ Bytecode::Executable& NativeJavaScriptBackedFunction::bytecode_executable()
 {
     auto& executable = m_shared_function_instance_data->m_executable;
     if (!executable) {
-        executable = MUST(Bytecode::compile(vm(), m_shared_function_instance_data, Bytecode::BuiltinAbstractOperationsEnabled::Yes));
+        executable = Bytecode::compile(vm(), m_shared_function_instance_data, Bytecode::BuiltinAbstractOperationsEnabled::Yes);
+        m_shared_function_instance_data->clear_compile_inputs();
     }
 
     return *executable;

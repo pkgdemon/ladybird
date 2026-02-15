@@ -41,17 +41,16 @@ public:
         GC::Ptr<PrivateEnvironment>,
         Object& prototype);
 
-    [[nodiscard]] static GC::Ref<ECMAScriptFunctionObject> create_from_function_node(
-        FunctionNode const&,
-        Utf16FlyString name,
+    [[nodiscard]] static GC::Ref<ECMAScriptFunctionObject> create_from_function_data(
         GC::Ref<Realm>,
-        GC::Ptr<Environment> parent_environment,
+        GC::Ref<SharedFunctionInstanceData>,
+        GC::Ptr<Environment>,
         GC::Ptr<PrivateEnvironment>);
 
     virtual void initialize(Realm&) override;
     virtual ~ECMAScriptFunctionObject() override = default;
 
-    virtual ThrowCompletionOr<void> get_stack_frame_size(size_t& registers_and_locals_count, size_t& constants_count, size_t& argument_count) override;
+    virtual void get_stack_frame_size(size_t& registers_and_locals_count, size_t& constants_count, size_t& argument_count) override;
     virtual ThrowCompletionOr<Value> internal_call(ExecutionContext&, Value this_argument) override;
     virtual ThrowCompletionOr<GC::Ref<Object>> internal_construct(ExecutionContext&, FunctionObject& new_target) override;
 
@@ -60,8 +59,13 @@ public:
     [[nodiscard]] bool is_module_wrapper() const { return shared_data().m_is_module_wrapper; }
     void set_is_module_wrapper(bool b) { const_cast<SharedFunctionInstanceData&>(shared_data()).m_is_module_wrapper = b; }
 
-    Statement const& ecmascript_code() const { return *shared_data().m_ecmascript_code; }
-    [[nodiscard]] virtual FunctionParameters const& formal_parameters() const override { return *shared_data().m_formal_parameters; }
+    Statement const& ecmascript_code() const
+    {
+        VERIFY(shared_data().m_ecmascript_code);
+        return *shared_data().m_ecmascript_code;
+    }
+    [[nodiscard]] u32 formal_parameter_count() const { return shared_data().m_formal_parameter_count; }
+    [[nodiscard]] ReadonlySpan<Utf16FlyString> parameter_names_for_mapped_arguments() const { return shared_data().m_parameter_names_for_mapped_arguments; }
 
     virtual Utf16String name_for_call_stack() const override;
 

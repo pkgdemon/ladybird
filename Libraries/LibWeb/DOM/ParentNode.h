@@ -12,7 +12,7 @@
 namespace Web::DOM {
 
 class WEB_API ParentNode : public Node {
-    WEB_PLATFORM_OBJECT(ParentNode, Node);
+    WEB_NON_IDL_PLATFORM_OBJECT(ParentNode, Node);
     GC_DECLARE_ALLOCATOR(ParentNode);
 
 public:
@@ -63,9 +63,9 @@ template<>
 inline bool Node::fast_is<ParentNode>() const { return is_parent_node(); }
 
 template<typename U>
-inline U* Node::shadow_including_first_ancestor_of_type()
+inline U* Node::first_flat_tree_ancestor_of_type()
 {
-    for (auto* ancestor = parent_or_shadow_host(); ancestor; ancestor = ancestor->parent_or_shadow_host()) {
+    for (auto* ancestor = flat_tree_parent(); ancestor; ancestor = ancestor->flat_tree_parent()) {
         if (is<U>(*ancestor))
             return &as<U>(*ancestor);
     }

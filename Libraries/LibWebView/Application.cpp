@@ -35,6 +35,12 @@ namespace WebView {
 Application* Application::s_the = nullptr;
 
 struct ApplicationSettingsObserver : public SettingsObserver {
+    virtual void browsing_data_settings_changed() override
+    {
+        auto const& browsing_data_settings = Application::settings().browsing_data_settings();
+        Application::request_server_client().async_set_disk_cache_settings(browsing_data_settings.disk_cache_settings);
+    }
+
     virtual void dns_settings_changed() override
     {
         Application::settings().dns_settings().visit(
@@ -410,6 +416,10 @@ ErrorOr<void> Application::launch_request_server()
 {
     m_request_server_client = TRY(launch_request_server_process());
 
+    m_request_server_client->on_retrieve_http_cookie = [this](URL::URL const& url) {
+        return m_cookie_jar->get_cookie(url, HTTP::Cookie::Source::Http);
+    };
+
     m_request_server_client->on_request_server_died = [this]() {
         m_request_server_client = nullptr;
 
@@ -629,25 +639,22 @@ void Application::process_did_exit(Process&& process)
 
 ErrorOr<LexicalPath> Application::path_for_downloaded_file(StringView file) const
 {
-    auto downloads_directory = Core::StandardPaths::downloads_directory();
+    if (browser_options().headless_mode.has_value()) {
+        auto downloads_directory = Core::StandardPaths::downloads_directory();
 
-    if (!FileSystem::is_directory(downloads_directory)) {
-        if (browser_options().headless_mode.has_value()) {
+        if (!FileSystem::is_directory(downloads_directory)) {
             dbgln("Unable to ask user for download folder in headless mode, please ensure {} is a directory or use the XDG_DOWNLOAD_DIR environment variable to set a new download directory", downloads_directory);
             return Error::from_errno(ENOENT);
         }
 
-        auto maybe_downloads_directory = ask_user_for_download_folder();
-        if (!maybe_downloads_directory.has_value())
-            return Error::from_errno(ECANCELED);
-
-        downloads_directory = maybe_downloads_directory.release_value();
+        return LexicalPath::join(downloads_directory, file);
     }
 
-    if (!FileSystem::is_directory(downloads_directory))
-        return Error::from_errno(ENOENT);
+    auto download_path = ask_user_for_download_path(file);
+    if (!download_path.has_value())
+        return Error::from_errno(ECANCELED);
 
-    return LexicalPath::join(downloads_directory, file);
+    return LexicalPath { download_path.release_value() };
 }
 
 void Application::display_download_confirmation_dialog(StringView download_name, LexicalPath const& path) const
@@ -887,7 +894,13 @@ void Application::initialize_actions()
     m_debug_menu->add_action(Action::create("Dump GC graph"sv, ActionID::DumpGCGraph, [this]() {
         if (auto view = active_web_view(); view.has_value()) {
             auto gc_graph_path = view->dump_gc_graph();
-            warnln("\033[33;1mDumped GC-graph into {}\033[0m", gc_graph_path);
+            if (gc_graph_path.is_error()) {
+                warnln("\033[31;1mFailed to dump GC graph: {}\033[0m", gc_graph_path.error());
+            } else {
+                warnln("\033[33;1mDumped GC graph into {}\033[0m", gc_graph_path.value());
+                if (auto source_dir = Core::Environment::get("LADYBIRD_SOURCE_DIR"sv); source_dir.has_value())
+                    warnln("\033[33;1mGC graph explorer: file://{}/Meta/gc-heap-explorer.html?script=file://{}\033[0m", *source_dir, gc_graph_path.value());
+            }
         }
     }));
     m_debug_menu->add_separator();

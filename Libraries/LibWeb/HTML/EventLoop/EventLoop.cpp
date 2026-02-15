@@ -304,6 +304,8 @@ void EventLoop::process_input_events() const
                         return page.handle_mousewheel(mouse_event.position, mouse_event.screen_position, mouse_event.button, mouse_event.buttons, mouse_event.modifiers, mouse_event.wheel_delta_x, mouse_event.wheel_delta_y);
                     case MouseEvent::Type::DoubleClick:
                         return page.handle_doubleclick(mouse_event.position, mouse_event.screen_position, mouse_event.button, mouse_event.buttons, mouse_event.modifiers);
+                    case MouseEvent::Type::TripleClick:
+                        return page.handle_tripleclick(mouse_event.position, mouse_event.screen_position, mouse_event.button, mouse_event.buttons, mouse_event.modifiers);
                     }
                     VERIFY_NOT_REACHED();
                 },
@@ -404,9 +406,8 @@ void EventLoop::update_the_rendering()
     }
 
     // 9. For each doc of docs, run the scroll steps for doc. [CSSOMVIEW]
-    for (auto& document : docs) {
+    for (auto& document : docs)
         document->run_the_scroll_steps();
-    }
 
     // 10. For each doc of docs, evaluate media queries and report changes for doc. [CSSOMVIEW]
     for (auto& document : docs) {

@@ -12,6 +12,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibWeb/CSS/CSSCounterStyleRule.h>
 #include <LibWeb/CSS/CSSFontFaceRule.h>
 #include <LibWeb/CSS/CSSImportRule.h>
 #include <LibWeb/CSS/CSSKeyframeRule.h>
@@ -91,17 +92,22 @@ GC::Ptr<CSSRule> Parser::convert_to_rule(Rule const& rule, Nested nested)
 {
     return rule.visit(
         [this, nested](AtRule const& at_rule) -> GC::Ptr<CSSRule> {
+            // https://compat.spec.whatwg.org/#css-at-rules
+            // @-webkit-keyframes must be supported as an alias of @keyframes.
+            if (at_rule.name.equals_ignoring_ascii_case("keyframes"sv) || at_rule.name.equals_ignoring_ascii_case("-webkit-keyframes"sv))
+                return convert_to_keyframes_rule(at_rule);
+
             if (has_ignored_vendor_prefix(at_rule.name))
                 return {};
+
+            if (at_rule.name.equals_ignoring_ascii_case("counter-style"sv))
+                return convert_to_counter_style_rule(at_rule);
 
             if (at_rule.name.equals_ignoring_ascii_case("font-face"sv))
                 return convert_to_font_face_rule(at_rule);
 
             if (at_rule.name.equals_ignoring_ascii_case("import"sv))
                 return convert_to_import_rule(at_rule);
-
-            if (at_rule.name.equals_ignoring_ascii_case("keyframes"sv))
-                return convert_to_keyframes_rule(at_rule);
 
             if (at_rule.name.equals_ignoring_ascii_case("layer"sv))
                 return convert_to_layer_rule(at_rule, nested);
@@ -810,6 +816,115 @@ GC::Ptr<CSSPropertyRule> Parser::convert_to_property_rule(AtRule const& rule)
     }
 
     return CSSPropertyRule::create(realm(), name, syntax_maybe.value(), inherits_maybe.value(), move(initial_value_maybe));
+}
+
+GC::Ptr<CSSCounterStyleRule> Parser::convert_to_counter_style_rule(AtRule const& rule)
+{
+    // https://drafts.csswg.org/css-counter-styles-3/#the-counter-style-rule
+    TokenStream prelude_stream { rule.prelude };
+    if (!rule.is_block_rule) {
+        ErrorReporter::the().report(CSS::Parser::InvalidRuleError {
+            .rule_name = "@counter-style"_fly_string,
+            .prelude = prelude_stream.dump_string(),
+            .description = "Must be a block, not a statement."_string,
+        });
+        return nullptr;
+    }
+
+    if (rule.prelude.is_empty()) {
+        ErrorReporter::the().report(CSS::Parser::InvalidRuleError {
+            .rule_name = "@counter-style"_fly_string,
+            .prelude = prelude_stream.dump_string(),
+            .description = "Empty prelude."_string,
+        });
+        return nullptr;
+    }
+
+    auto name = parse_counter_style_name(prelude_stream);
+    if (!name.has_value()) {
+        ErrorReporter::the().report(CSS::Parser::InvalidRuleError {
+            .rule_name = "@counter-style"_fly_string,
+            .prelude = prelude_stream.dump_string(),
+            .description = "Missing counter style name."_string,
+        });
+        return nullptr;
+    }
+
+    prelude_stream.discard_whitespace();
+    if (prelude_stream.has_next_token()) {
+        ErrorReporter::the().report(CSS::Parser::InvalidRuleError {
+            .rule_name = "@counter-style"_fly_string,
+            .prelude = prelude_stream.dump_string(),
+            .description = "Trailing tokens after name in prelude."_string,
+        });
+        return nullptr;
+    }
+
+    // https://drafts.csswg.org/css-counter-styles-3/#typedef-counter-style-name
+    // When used here, to define a counter style, it also cannot be any of the non-overridable counter-style names
+    // FIXME: We should allow these in the UA stylesheet in order to initially define them.
+    if (CSSCounterStyleRule::matches_non_overridable_counter_style_name(name.value())) {
+        ErrorReporter::the().report(CSS::Parser::InvalidRuleError {
+            .rule_name = "@counter-style"_fly_string,
+            .prelude = prelude_stream.dump_string(),
+            .description = "Non-overridable counter style name."_string,
+        });
+        return nullptr;
+    }
+
+    RefPtr<StyleValue const> system;
+    RefPtr<StyleValue const> negative;
+    RefPtr<StyleValue const> prefix;
+    RefPtr<StyleValue const> suffix;
+    RefPtr<StyleValue const> range;
+    RefPtr<StyleValue const> pad;
+    RefPtr<StyleValue const> fallback;
+    RefPtr<StyleValue const> symbols;
+    RefPtr<StyleValue const> additive_symbols;
+    RefPtr<StyleValue const> speak_as;
+
+    rule.for_each_as_declaration_list([&](auto& declaration) {
+        auto const& descriptor = convert_to_descriptor(AtRuleID::CounterStyle, declaration);
+        if (!descriptor.has_value())
+            return;
+
+        switch (descriptor->descriptor_id) {
+        case DescriptorID::System:
+            system = descriptor->value;
+            break;
+        case DescriptorID::Negative:
+            negative = descriptor->value;
+            break;
+        case DescriptorID::Prefix:
+            prefix = descriptor->value;
+            break;
+        case DescriptorID::Suffix:
+            suffix = descriptor->value;
+            break;
+        case DescriptorID::Range:
+            range = descriptor->value;
+            break;
+        case DescriptorID::Pad:
+            pad = descriptor->value;
+            break;
+        case DescriptorID::Fallback:
+            fallback = descriptor->value;
+            break;
+        case DescriptorID::Symbols:
+            symbols = descriptor->value;
+            break;
+        case DescriptorID::AdditiveSymbols:
+            additive_symbols = descriptor->value;
+            break;
+        case DescriptorID::SpeakAs:
+            speak_as = descriptor->value;
+            break;
+        default:
+            VERIFY_NOT_REACHED();
+        }
+    });
+
+    return CSSCounterStyleRule::create(realm(), name.release_value(), move(system), move(negative), move(prefix), move(suffix), move(range), move(pad), move(fallback), move(symbols), move(additive_symbols), move(speak_as));
 }
 
 GC::Ptr<CSSFontFaceRule> Parser::convert_to_font_face_rule(AtRule const& rule)

@@ -1,11 +1,18 @@
 /*
  * Copyright (c) 2022-2023, Andreas Kling <andreas@ladybird.org>
  * Copyright (c) 2025, Sam Atkins <sam@ladybird.org>
+ * Copyright (c) 2026, Jelle Raaijmakers <jelle@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibWeb/CSS/ComputedProperties.h>
+#include <LibWeb/CSS/SystemColor.h>
 #include <LibWeb/DOM/Document.h>
+#include <LibWeb/DOM/Element.h>
+#include <LibWeb/DOM/ShadowRoot.h>
+#include <LibWeb/DOM/Text.h>
+#include <LibWeb/Layout/Node.h>
 #include <LibWeb/Painting/DisplayListRecorder.h>
 #include <LibWeb/Painting/DisplayListRecordingContext.h>
 #include <LibWeb/Painting/Paintable.h>
@@ -33,8 +40,13 @@ Paintable::Paintable(Layout::Node const& layout_node)
     m_inline = layout_node.is_inline();
 }
 
-Paintable::~Paintable()
+Paintable::~Paintable() = default;
+
+void Paintable::finalize()
 {
+    Base::finalize();
+    if (m_list_node.is_in_list())
+        m_list_node.remove();
 }
 
 void Paintable::visit_edges(Cell::Visitor& visitor)
@@ -170,8 +182,32 @@ StackingContext* Paintable::enclosing_stacking_context()
 void Paintable::paint_inspector_overlay(DisplayListRecordingContext& context) const
 {
     auto& display_list_recorder = context.display_list_recorder();
-    if (auto const* paintable_box = as_if<PaintableBox>(this))
-        display_list_recorder.set_accumulated_visual_context(paintable_box->accumulated_visual_context());
+    auto const* paintable_box = is<PaintableBox>(this) ? as<PaintableBox>(this) : this->first_ancestor_of_type<PaintableBox>();
+
+    if (paintable_box) {
+        Vector<RefPtr<AccumulatedVisualContext const>> relevant_contexts;
+        for (auto visual_context = paintable_box->accumulated_visual_context(); visual_context != nullptr; visual_context = visual_context->parent()) {
+            auto should_keep_entry = visual_context->data().visit(
+                [](ScrollData const&) -> bool { return true; },
+                [](ClipData const&) -> bool { return false; },
+                [](TransformData const&) -> bool { return true; },
+                [](PerspectiveData const&) -> bool { return true; },
+                [](ClipPathData const&) -> bool { return false; },
+                [](EffectsData const&) -> bool { return false; });
+
+            if (should_keep_entry)
+                relevant_contexts.append(visual_context);
+        }
+
+        auto visual_context_id = 1;
+        RefPtr<AccumulatedVisualContext> copied_visual_context;
+        for (auto const& original_visual_context : relevant_contexts.in_reverse())
+            copied_visual_context = AccumulatedVisualContext::create(visual_context_id++, original_visual_context->data(), copied_visual_context);
+
+        if (copied_visual_context)
+            display_list_recorder.set_accumulated_visual_context(copied_visual_context);
+    }
+
     paint_inspector_overlay_internal(context);
     display_list_recorder.set_accumulated_visual_context({});
 }
@@ -271,6 +307,116 @@ void Paintable::set_needs_paint_only_properties_update(bool needs_update)
 
     if (needs_update) {
         document().set_needs_to_resolve_paint_only_properties();
+    }
+}
+
+// https://drafts.csswg.org/css-pseudo-4/#highlight-styling
+// FIXME: Support additional ::selection properties: text-underline-offset, text-underline-position, stroke-color,
+//        fill-color, stroke-width, and CSS custom properties.
+Paintable::SelectionStyle Paintable::selection_style() const
+{
+    auto color_scheme = computed_values().color_scheme();
+    SelectionStyle default_style { CSS::SystemColor::highlight(color_scheme), {}, {}, {} };
+
+    // For text nodes, check the parent element since text nodes don't have computed properties.
+    auto node = dom_node();
+    if (!node)
+        return default_style;
+
+    auto element = is<DOM::Element>(*node) ? as<DOM::Element>(*node) : node->parent_element();
+    if (!element)
+        return default_style;
+
+    auto style_from_element = [&](DOM::Element const& element) -> Optional<SelectionStyle> {
+        auto element_layout_node = element.layout_node();
+        if (!element_layout_node)
+            return {};
+
+        auto computed_selection_style = element.computed_properties(CSS::PseudoElement::Selection);
+        if (!computed_selection_style)
+            return {};
+
+        auto context = CSS::ColorResolutionContext::for_layout_node_with_style(*element_layout_node);
+
+        SelectionStyle style;
+        style.background_color = computed_selection_style->color_or_fallback(CSS::PropertyID::BackgroundColor, context, Color::Transparent);
+
+        // Only use text color if it was explicitly set in the ::selection rule, not inherited.
+        if (!computed_selection_style->is_property_inherited(CSS::PropertyID::Color))
+            style.text_color = computed_selection_style->color_or_fallback(CSS::PropertyID::Color, context, Color::Transparent);
+
+        // Only use text-shadow if it was explicitly set in the ::selection rule, not inherited.
+        if (!computed_selection_style->is_property_inherited(CSS::PropertyID::TextShadow)) {
+            auto const& css_shadows = computed_selection_style->text_shadow(*element_layout_node);
+            Vector<ShadowData> shadows;
+            shadows.ensure_capacity(css_shadows.size());
+            for (auto const& shadow : css_shadows)
+                shadows.unchecked_append(ShadowData::from_css(shadow, *element_layout_node));
+            style.text_shadow = move(shadows);
+        }
+
+        // Only use text-decoration if it was explicitly set in the ::selection rule, not inherited.
+        if (!computed_selection_style->is_property_inherited(CSS::PropertyID::TextDecorationLine)) {
+            style.text_decoration = TextDecorationStyle {
+                .line = computed_selection_style->text_decoration_line(),
+                .style = computed_selection_style->text_decoration_style(),
+                .color = computed_selection_style->color_or_fallback(CSS::PropertyID::TextDecorationColor, context, style.text_color.value_or(Color::Black)),
+            };
+        }
+
+        // Only return a style if there's a meaningful customization. This allows us to continue checking shadow hosts
+        // when the current element only has UA default styles.
+        if (!style.has_styling())
+            return {};
+
+        return style;
+    };
+
+    // Check the element itself.
+    if (auto style = style_from_element(*element); style.has_value())
+        return style.release_value();
+
+    // If inside a shadow tree, check the shadow host. This enables ::selection styling on elements like <input> to
+    // apply to text rendered inside their shadow DOM.
+    if (auto shadow_root = element->containing_shadow_root(); shadow_root && shadow_root->is_user_agent_internal()) {
+        if (auto const* host = shadow_root->host()) {
+            if (auto style = style_from_element(*host); style.has_value())
+                return style.release_value();
+        }
+    }
+
+    return default_style;
+}
+
+void Paintable::scroll_ancestor_to_offset_into_view(size_t offset)
+{
+    // Walk up to find the containing PaintableWithLines.
+    GC::Ptr<PaintableWithLines const> paintable_with_lines;
+    for (auto* ancestor = this; ancestor; ancestor = ancestor->parent()) {
+        paintable_with_lines = as_if<PaintableWithLines>(*ancestor);
+        if (paintable_with_lines)
+            break;
+    }
+    if (!paintable_with_lines)
+        return;
+
+    // Find the fragment containing the offset and compute a cursor rect.
+    for (auto const& fragment : paintable_with_lines->fragments()) {
+        if (&fragment.paintable() != this)
+            continue;
+        if (offset < fragment.start_offset() || offset > fragment.start_offset() + fragment.length_in_code_units())
+            continue;
+
+        auto cursor_rect = fragment.range_rect(SelectionState::StartAndEnd, offset, offset);
+
+        // Walk up the containing block chain to find the nearest scrollable ancestor.
+        for (auto* ancestor = containing_block(); ancestor; ancestor = ancestor->containing_block()) {
+            if (ancestor->has_scrollable_overflow()) {
+                ancestor->scroll_into_view(cursor_rect);
+                break;
+            }
+        }
+        return;
     }
 }
 

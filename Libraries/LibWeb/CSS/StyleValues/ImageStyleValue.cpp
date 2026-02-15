@@ -8,6 +8,7 @@
  */
 
 #include <LibGfx/ImmutableBitmap.h>
+#include <LibWeb/CSS/CSSStyleSheet.h>
 #include <LibWeb/CSS/ComputedValues.h>
 #include <LibWeb/CSS/Fetch.h>
 #include <LibWeb/CSS/StyleValues/ImageStyleValue.h>
@@ -15,6 +16,7 @@
 #include <LibWeb/DOMURL/DOMURL.h>
 #include <LibWeb/HTML/DecodedImageData.h>
 #include <LibWeb/HTML/PotentialCORSRequest.h>
+#include <LibWeb/HTML/Scripting/Environments.h>
 #include <LibWeb/HTML/SharedResourceRequest.h>
 #include <LibWeb/Painting/DisplayListRecorder.h>
 #include <LibWeb/Painting/DisplayListRecordingContext.h>
@@ -95,6 +97,7 @@ void ImageStyleValue::animate()
         return;
 
     m_current_frame_index = (m_current_frame_index + 1) % image_data->frame_count();
+    m_current_frame_index = image_data->notify_frame_advanced(m_current_frame_index);
     auto current_frame_duration = image_data->frame_duration(m_current_frame_index);
 
     if (current_frame_duration != m_timer->interval())

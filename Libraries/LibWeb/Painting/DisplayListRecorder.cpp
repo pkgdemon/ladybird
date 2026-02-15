@@ -15,16 +15,9 @@ namespace Web::Painting {
 DisplayListRecorder::DisplayListRecorder(DisplayList& command_list)
     : m_display_list(command_list)
 {
-    save();
-    // Reserve for visual viewport transform
-    VERIFY(m_display_list.commands().size() == DisplayList::VISUAL_VIEWPORT_TRANSFORM_INDEX);
-    apply_transform({}, Gfx::FloatMatrix4x4::identity());
 }
 
-DisplayListRecorder::~DisplayListRecorder()
-{
-    restore();
-}
+DisplayListRecorder::~DisplayListRecorder() = default;
 
 template<typename T>
 consteval static int command_nesting_level_change(T const& command)
@@ -51,11 +44,11 @@ void DisplayListRecorder::add_rounded_rect_clip(CornerRadii corner_radii, Gfx::I
     APPEND(AddRoundedRectClip { corner_radii, border_rect, corner_clip });
 }
 
-void DisplayListRecorder::add_mask(RefPtr<DisplayList> display_list, Gfx::IntRect rect)
+void DisplayListRecorder::add_mask(RefPtr<DisplayList> display_list, Gfx::IntRect rect, Gfx::MaskKind kind)
 {
     if (rect.is_empty())
         return;
-    APPEND(AddMask { move(display_list), rect });
+    APPEND(AddMask { move(display_list), rect, kind });
 }
 
 void DisplayListRecorder::fill_rect(Gfx::IntRect const& rect, Color color)
@@ -226,7 +219,7 @@ void DisplayListRecorder::draw_text(Gfx::IntRect const& rect, Utf16String const&
     if (rect.is_empty() || color.alpha() == 0)
         return;
 
-    auto glyph_run = Gfx::shape_text({}, 0, raw_text.utf16_view(), font, Gfx::GlyphRun::TextType::Ltr, {});
+    auto glyph_run = Gfx::shape_text({}, 0, raw_text.utf16_view(), font, Gfx::GlyphRun::TextType::Ltr);
     float baseline_x = 0;
     if (alignment == Gfx::TextAlignment::CenterLeft) {
         baseline_x = rect.x();
@@ -247,14 +240,13 @@ void DisplayListRecorder::draw_glyph_run(Gfx::FloatPoint baseline_start, Gfx::Gl
 {
     if (color.alpha() == 0)
         return;
+    glyph_run.ensure_text_blob(scale);
     APPEND(DrawGlyphRun {
         .glyph_run = glyph_run,
-        .scale = scale,
         .rect = rect,
         .translation = baseline_start,
         .color = color,
         .orientation = orientation,
-        .bounding_rectangle = glyph_run.bounding_rect().scaled(scale).translated(baseline_start).to_type<int>(),
     });
 }
 
@@ -306,9 +298,9 @@ void DisplayListRecorder::paint_inner_box_shadow(PaintBoxShadowParams params)
 
 void DisplayListRecorder::paint_text_shadow(int blur_radius, Gfx::IntRect bounding_rect, Gfx::IntRect text_rect, Gfx::GlyphRun const& glyph_run, double glyph_run_scale, Color color, Gfx::FloatPoint draw_location)
 {
+    glyph_run.ensure_text_blob(glyph_run_scale);
     APPEND(PaintTextShadow {
         .glyph_run = glyph_run,
-        .glyph_run_scale = glyph_run_scale,
         .shadow_bounding_rect = bounding_rect,
         .text_rect = text_rect,
         .draw_location = draw_location,
@@ -362,23 +354,6 @@ void DisplayListRecorder::paint_scrollbar(int scroll_frame_id, Gfx::IntRect gutt
 void DisplayListRecorder::apply_effects(float opacity, Gfx::CompositingAndBlendingOperator compositing_and_blending_operator, Optional<Gfx::Filter> filter)
 {
     APPEND(ApplyEffects { .opacity = opacity, .compositing_and_blending_operator = compositing_and_blending_operator, .filter = move(filter) });
-}
-
-void DisplayListRecorder::apply_transform(Gfx::FloatPoint origin, Gfx::FloatMatrix4x4 matrix)
-{
-    APPEND(ApplyTransform {
-        .origin = origin,
-        .matrix = matrix,
-    });
-}
-
-void DisplayListRecorder::apply_mask_bitmap(Gfx::IntPoint origin, Gfx::ImmutableBitmap const& bitmap, Gfx::MaskKind kind)
-{
-    APPEND(ApplyMaskBitmap {
-        .origin = origin,
-        .bitmap = bitmap,
-        .kind = kind,
-    });
 }
 
 }

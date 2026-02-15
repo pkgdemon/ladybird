@@ -2,7 +2,7 @@
  * Copyright (c) 2018-2020, Andreas Kling <andreas@ladybird.org>
  * Copyright (c) 2021, Max Wipfli <mail@maxwipfli.ch>
  * Copyright (c) 2024, Sam Atkins <sam@ladybird.org>
- * Copyright (c) 2023-2025, Shannon Booth <shannon@serenityos.org>
+ * Copyright (c) 2023-2026, Shannon Booth <shannon@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -99,31 +99,22 @@ void URL::append_path(StringView path)
 bool URL::cannot_have_a_username_or_password_or_port() const
 {
     // A URL cannot have a username/password/port if its host is null or the empty string, or its scheme is "file".
-
     return !m_data->host.has_value() || m_data->host->is_empty_host() || m_data->scheme == "file"sv;
 }
 
 // https://url.spec.whatwg.org/#default-port
 Optional<u16> default_port_for_scheme(StringView scheme)
 {
-    // Spec defined mappings with port:
-    if (scheme == "ftp")
+    if (scheme == "ftp"sv)
         return 21;
-    if (scheme == "http")
+    if (scheme == "http"sv)
         return 80;
-    if (scheme == "https")
+    if (scheme == "https"sv)
         return 443;
-    if (scheme == "ws")
+    if (scheme == "ws"sv)
         return 80;
-    if (scheme == "wss")
+    if (scheme == "wss"sv)
         return 443;
-
-    // NOTE: not in spec, but we support these too
-    if (scheme == "irc")
-        return 6667;
-    if (scheme == "ircs")
-        return 6697;
-
     return {};
 }
 
@@ -262,18 +253,11 @@ String URL::serialize(ExcludeFragment exclude_fragment) const
     }
 
     // 3. If url’s host is null, url does not have an opaque path, url’s path’s size is greater than 1, and url’s path[0] is the empty string, then append U+002F (/) followed by U+002E (.) to output.
+    if (!host().has_value() && !has_an_opaque_path() && paths().size() > 1 && paths()[0].is_empty())
+        output.append("/."sv);
+
     // 4. Append the result of URL path serializing url to output.
-    // FIXME: Implement this closer to spec steps.
-    if (has_an_opaque_path()) {
-        output.append(m_data->paths[0]);
-    } else {
-        if (!m_data->host.has_value() && m_data->paths.size() > 1 && m_data->paths[0].is_empty())
-            output.append("/."sv);
-        for (auto& segment : m_data->paths) {
-            output.append('/');
-            output.append(segment);
-        }
-    }
+    output.append(serialize_path());
 
     // 5. If url’s query is non-null, append U+003F (?), followed by url’s query, to output.
     if (m_data->query.has_value()) {

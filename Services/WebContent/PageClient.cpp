@@ -12,21 +12,26 @@
 #include <LibCore/Timer.h>
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/ShareableBitmap.h>
+#include <LibHTTP/Cookie/ParsedCookie.h>
 #include <LibJS/Console.h>
 #include <LibJS/Runtime/ConsoleObject.h>
 #include <LibWeb/Bindings/MainThreadVM.h>
 #include <LibWeb/CSS/CSSImportRule.h>
-#include <LibWeb/Cookie/ParsedCookie.h>
+#include <LibWeb/CSS/StyleSheetList.h>
 #include <LibWeb/DOM/CharacterData.h>
+#include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Element.h>
 #include <LibWeb/DOM/MutationType.h>
 #include <LibWeb/DOM/NodeList.h>
+#include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/HTML/HTMLLinkElement.h>
 #include <LibWeb/HTML/Scripting/ClassicScript.h>
 #include <LibWeb/HTML/TraversableNavigable.h>
+#include <LibWeb/InvalidateDisplayList.h>
 #include <LibWeb/Layout/Viewport.h>
 #include <LibWeb/Painting/PaintableBox.h>
 #include <LibWebView/SiteIsolation.h>
+#include <LibWebView/ViewImplementation.h>
 #include <WebContent/ConnectionFromClient.h>
 #include <WebContent/DevToolsConsoleClient.h>
 #include <WebContent/PageClient.h>
@@ -87,6 +92,7 @@ void PageClient::visit_edges(JS::Cell::Visitor& visitor)
 {
     Base::visit_edges(visitor);
     visitor.visit(m_page);
+    visitor.visit(m_top_level_document_console_client);
 
     if (m_webdriver)
         m_webdriver->visit_edges(visitor);
@@ -203,6 +209,23 @@ void PageClient::report_finished_handling_input_event(u64 page_id, Web::EventRes
 void PageClient::set_viewport_size(Web::DevicePixelSize const& size)
 {
     page().top_level_traversable()->set_viewport_size(page().device_to_css_size(size));
+}
+
+void PageClient::set_device_pixel_ratio(double device_pixel_ratio)
+{
+    if (m_device_pixel_ratio == device_pixel_ratio)
+        return;
+
+    m_device_pixel_ratio = device_pixel_ratio;
+
+    auto traversable = page().top_level_traversable();
+    traversable->backing_store_manager()
+        .resize_backing_stores_if_needed(Web::Painting::BackingStoreManager::WindowResizingInProgress::No);
+
+    if (auto document = traversable->active_document()) {
+        document->set_needs_media_query_evaluation();
+        document->set_needs_display(Web::InvalidateDisplayList::Yes);
+    }
 }
 
 void PageClient::set_maximum_frames_per_second(u64 maximum_frames_per_second)
@@ -370,6 +393,11 @@ void PageClient::page_did_set_browser_zoom(double factor)
     }));
 }
 
+void PageClient::page_did_set_device_pixel_ratio_for_testing(double ratio)
+{
+    set_device_pixel_ratio(ratio);
+}
+
 void PageClient::page_did_request_context_menu(Web::CSSPixelPoint content_position)
 {
     client().async_did_request_context_menu(m_id, page().css_to_device_point(content_position).to_type<int>());
@@ -488,24 +516,46 @@ void PageClient::page_did_change_favicon(Gfx::Bitmap const& favicon)
     client().async_did_change_favicon(m_id, favicon.to_shareable_bitmap());
 }
 
-Vector<Web::Cookie::Cookie> PageClient::page_did_request_all_cookies_webdriver(URL::URL const& url)
+Optional<Core::SharedVersion> PageClient::page_did_request_document_cookie_version(Core::SharedVersionIndex document_index)
+{
+    return Core::get_shared_version(m_document_cookie_version_buffer, document_index);
+}
+
+void PageClient::page_did_receive_document_cookie_version_buffer(Core::AnonymousBuffer document_cookie_version_buffer)
+{
+    m_document_cookie_version_buffer = move(document_cookie_version_buffer);
+}
+
+void PageClient::page_did_request_document_cookie_version_index(Web::UniqueNodeID document_id, String const& domain)
+{
+    // FIXME: Support transferring DistinctNumeric over IPC.
+    client().async_did_request_document_cookie_version_index(m_id, document_id.value(), domain);
+}
+
+void PageClient::page_did_receive_document_cookie_version_index(Web::UniqueNodeID document_id, Core::SharedVersionIndex document_index)
+{
+    if (auto* document = as_if<Web::DOM::Document>(Web::DOM::Node::from_unique_id(document_id)))
+        document->set_cookie_version_index(document_index);
+}
+
+Vector<HTTP::Cookie::Cookie> PageClient::page_did_request_all_cookies_webdriver(URL::URL const& url)
 {
     return client().did_request_all_cookies_webdriver(url);
 }
 
-Vector<Web::Cookie::Cookie> PageClient::page_did_request_all_cookies_cookiestore(URL::URL const& url)
+Vector<HTTP::Cookie::Cookie> PageClient::page_did_request_all_cookies_cookiestore(URL::URL const& url)
 {
     return client().did_request_all_cookies_cookiestore(url);
 }
 
-Optional<Web::Cookie::Cookie> PageClient::page_did_request_named_cookie(URL::URL const& url, String const& name)
+Optional<HTTP::Cookie::Cookie> PageClient::page_did_request_named_cookie(URL::URL const& url, String const& name)
 {
     return client().did_request_named_cookie(url, name);
 }
 
-String PageClient::page_did_request_cookie(URL::URL const& url, Web::Cookie::Source source)
+HTTP::Cookie::VersionedCookie PageClient::page_did_request_cookie(URL::URL const& url, HTTP::Cookie::Source source)
 {
-    auto response = client().send_sync_but_allow_failure<Messages::WebContentClient::DidRequestCookie>(url, source);
+    auto response = client().send_sync_but_allow_failure<Messages::WebContentClient::DidRequestCookie>(m_id, url, source);
     if (!response) {
         dbgln("WebContent client disconnected during DidRequestCookie. Exiting peacefully.");
         exit(0);
@@ -513,7 +563,7 @@ String PageClient::page_did_request_cookie(URL::URL const& url, Web::Cookie::Sou
     return response->take_cookie();
 }
 
-void PageClient::page_did_set_cookie(URL::URL const& url, Web::Cookie::ParsedCookie const& cookie, Web::Cookie::Source source)
+void PageClient::page_did_set_cookie(URL::URL const& url, HTTP::Cookie::ParsedCookie const& cookie, HTTP::Cookie::Source source)
 {
     auto response = client().send_sync_but_allow_failure<Messages::WebContentClient::DidSetCookie>(url, cookie, source);
     if (!response) {
@@ -522,14 +572,22 @@ void PageClient::page_did_set_cookie(URL::URL const& url, Web::Cookie::ParsedCoo
     }
 }
 
-void PageClient::page_did_update_cookie(Web::Cookie::Cookie const& cookie)
+void PageClient::page_did_update_cookie(HTTP::Cookie::Cookie const& cookie)
 {
     client().async_did_update_cookie(cookie);
+
+    // Since the above (test-only) IPC is async, we reset the document cookie version now to avoid a stale cache.
+    if (auto* document = page().top_level_browsing_context().active_document())
+        document->reset_cookie_version();
 }
 
 void PageClient::page_did_expire_cookies_with_time_offset(AK::Duration offset)
 {
     client().async_did_expire_cookies_with_time_offset(offset);
+
+    // Since the above (test-only) IPC is async, we reset the document cookie version now to avoid a stale cache.
+    if (auto* document = page().top_level_browsing_context().active_document())
+        document->reset_cookie_version();
 }
 
 Optional<String> PageClient::page_did_request_storage_item(Web::StorageAPI::StorageEndpointType storage_endpoint, String const& storage_key, String const& bottle_key)

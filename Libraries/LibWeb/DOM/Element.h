@@ -6,19 +6,14 @@
 
 #pragma once
 
-#include <AK/IterationDecision.h>
 #include <AK/Optional.h>
 #include <LibWeb/ARIA/ARIAMixin.h>
-#include <LibWeb/ARIA/AttributeNames.h>
 #include <LibWeb/Animations/Animatable.h>
 #include <LibWeb/Bindings/ElementPrototype.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/Bindings/ShadowRootPrototype.h>
-#include <LibWeb/CSS/CascadedProperties.h>
 #include <LibWeb/CSS/Selector.h>
-#include <LibWeb/CSS/StyleInvalidation.h>
 #include <LibWeb/CSS/StyleProperty.h>
-#include <LibWeb/CSS/StylePropertyMapReadOnly.h>
 #include <LibWeb/DOM/ChildNode.h>
 #include <LibWeb/DOM/NonDocumentTypeChildNode.h>
 #include <LibWeb/DOM/ParentNode.h>
@@ -28,12 +23,11 @@
 #include <LibWeb/Export.h>
 #include <LibWeb/HTML/AttributeNames.h>
 #include <LibWeb/HTML/EventLoop/Task.h>
-#include <LibWeb/HTML/LazyLoadingElement.h>
 #include <LibWeb/HTML/ScrollOptions.h>
 #include <LibWeb/HTML/TagNames.h>
 #include <LibWeb/HTML/TokenizedFeatures.h>
 #include <LibWeb/HTML/UserNavigationInvolvement.h>
-#include <LibWeb/IntersectionObserver/IntersectionObserver.h>
+#include <LibWeb/IntersectionObserver/IntersectionObserverRegistration.h>
 #include <LibWeb/TrustedTypes/TrustedHTML.h>
 #include <LibWeb/TrustedTypes/TrustedScript.h>
 #include <LibWeb/TrustedTypes/TrustedScriptURL.h>
@@ -124,6 +118,8 @@ public:
     virtual ~Element() override;
 
     virtual bool is_dom_element() const final { return true; }
+
+    virtual Node& slottable_as_node() override { return *this; }
 
     FlyString const& qualified_name() const { return m_qualified_name.as_string(); }
     FlyString const& html_uppercased_qualified_name() const;
@@ -279,8 +275,8 @@ public:
     GC::Ptr<ShadowRoot const> shadow_root() const { return m_shadow_root; }
     void set_shadow_root(GC::Ptr<ShadowRoot>);
 
-    void set_custom_properties(Optional<CSS::PseudoElement>, OrderedHashMap<FlyString, CSS::StyleProperty> custom_properties);
-    [[nodiscard]] OrderedHashMap<FlyString, CSS::StyleProperty> const& custom_properties(Optional<CSS::PseudoElement>) const;
+    void set_custom_property_data(Optional<CSS::PseudoElement>, RefPtr<CSS::CustomPropertyData const>);
+    [[nodiscard]] RefPtr<CSS::CustomPropertyData const> custom_property_data(Optional<CSS::PseudoElement>) const;
 
     // FIXME: None of these flags ever get unset should this element's style change so that it no longer relies on these
     //        things - doing so would potentially improve performance by avoiding unnecessary style invalidations.
@@ -341,6 +337,7 @@ public:
         Yes,
     };
     bool is_potentially_scrollable(TreatOverflowClipOnBodyParentAsOverflowHidden) const;
+    bool is_scroll_container() const;
 
     double scroll_top() const;
     double scroll_left() const;
@@ -557,7 +554,7 @@ protected:
     virtual i32 default_tab_index_value() const;
 
     // https://dom.spec.whatwg.org/#concept-element-attributes-change-ext
-    virtual void attribute_changed(FlyString const& local_name, Optional<String> const& old_value, Optional<String> const& value, Optional<FlyString> const& namespace_);
+    MUST_UPCALL virtual void attribute_changed(FlyString const& local_name, Optional<String> const& old_value, Optional<String> const& value, Optional<FlyString> const& namespace_);
 
     virtual void computed_properties_changed() { }
 
@@ -603,7 +600,7 @@ private:
 
     GC::Ptr<CSS::CascadedProperties> m_cascaded_properties;
     GC::Ptr<CSS::ComputedProperties> m_computed_properties;
-    OrderedHashMap<FlyString, CSS::StyleProperty> m_custom_properties;
+    RefPtr<CSS::CustomPropertyData const> m_custom_property_data;
 
     using PseudoElementData = HashMap<CSS::PseudoElement, GC::Ref<PseudoElement>>;
     mutable OwnPtr<PseudoElementData> m_pseudo_element_data;

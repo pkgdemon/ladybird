@@ -2,10 +2,10 @@ include(libjs_generators)
 
 set(SOURCES
     AST.cpp
+    ASTDump.cpp
     Bytecode/ASTCodegen.cpp
     Bytecode/BasicBlock.cpp
     Bytecode/Builtins.cpp
-    Bytecode/CodeGenerationError.cpp
     Bytecode/Executable.cpp
     Bytecode/Generator.cpp
     Bytecode/IdentifierTable.cpp
@@ -65,6 +65,7 @@ set(SOURCES
     Runtime/BooleanObject.cpp
     Runtime/BooleanPrototype.cpp
     Runtime/BoundFunction.cpp
+    Runtime/ClassConstruction.cpp
     Runtime/ClassFieldDefinition.cpp
     Runtime/Completion.cpp
     Runtime/CompletionCell.cpp
@@ -263,6 +264,7 @@ set(SOURCES
     Runtime/WeakSetPrototype.cpp
     Runtime/WrapForValidIteratorPrototype.cpp
     Runtime/WrappedFunction.cpp
+    ScopeCollector.cpp
     Script.cpp
     SourceCode.cpp
     SourceTextModule.cpp

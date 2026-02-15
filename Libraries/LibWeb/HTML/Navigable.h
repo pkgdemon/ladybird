@@ -157,7 +157,7 @@ public:
 
     bool allowed_by_sandboxing_to_navigate(Navigable const& target, SourceSnapshotParams const&);
 
-    void reload(UserNavigationInvolvement = UserNavigationInvolvement::None);
+    void reload(Optional<SerializationRecord> navigation_api_state = {}, UserNavigationInvolvement = UserNavigationInvolvement::None);
 
     // https://github.com/whatwg/html/issues/9690
     [[nodiscard]] bool has_been_destroyed() const { return m_has_been_destroyed; }
@@ -171,6 +171,8 @@ public:
     CSSPixelSize viewport_size() const { return m_viewport_size; }
     void set_viewport_size(CSSPixelSize);
     void perform_scroll_of_viewport_scrolling_box(CSSPixelPoint position);
+
+    Painting::BackingStoreManager& backing_store_manager() { return *m_backing_store_manager; }
 
     // https://html.spec.whatwg.org/multipage/webappapis.html#rendering-opportunity
     [[nodiscard]] bool has_a_rendering_opportunity() const;
@@ -199,10 +201,10 @@ public:
 
     bool has_pending_navigations() const { return !m_pending_navigations.is_empty(); }
 
-    bool is_ready_to_paint() const;
     void ready_to_paint();
+    void record_display_list_and_scroll_state(PaintConfig);
     void paint_next_frame();
-    void start_display_list_rendering(Gfx::PaintingSurface&, PaintConfig, Function<void()>&& callback);
+    void render_screenshot(Gfx::PaintingSurface&, PaintConfig, Function<void()>&& callback);
 
     bool needs_repaint() const { return m_needs_repaint; }
     void set_needs_repaint() { m_needs_repaint = true; }
@@ -210,6 +212,8 @@ public:
     [[nodiscard]] bool has_inclusive_ancestor_with_visibility_hidden() const;
 
     RefPtr<Gfx::SkiaBackendContext> skia_backend_context() const;
+
+    RenderingThread& rendering_thread() { return m_rendering_thread; }
 
     void set_pending_set_browser_zoom_request(bool value) { m_pending_set_browser_zoom_request = value; }
     bool pending_set_browser_zoom_request() const { return m_pending_set_browser_zoom_request; }
@@ -285,7 +289,6 @@ private:
     bool m_needs_repaint { true };
     bool m_pending_set_browser_zoom_request { false };
     bool m_should_show_line_box_borders { false };
-    i32 m_number_of_queued_rasterization_tasks { 0 };
     GC::Ref<Painting::BackingStoreManager> m_backing_store_manager;
     RefPtr<Gfx::SkiaBackendContext> m_skia_backend_context;
     RenderingThread m_rendering_thread;

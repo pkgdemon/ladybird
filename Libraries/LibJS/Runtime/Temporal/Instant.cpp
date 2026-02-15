@@ -2,7 +2,7 @@
  * Copyright (c) 2021-2023, Linus Groh <linusg@serenityos.org>
  * Copyright (c) 2021, Idan Horowitz <idan.horowitz@serenityos.org>
  * Copyright (c) 2023, Shannon Booth <shannon@serenityos.org>
- * Copyright (c) 2024, Tim Flynn <trflynn89@ladybird.org>
+ * Copyright (c) 2024-2026, Tim Flynn <trflynn89@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -64,14 +64,8 @@ Crypto::UnsignedBigInteger const HOURS_PER_DAY = 24_bigint;
 // 8.5.1 IsValidEpochNanoseconds ( epochNanoseconds ), https://tc39.es/proposal-temporal/#sec-temporal-isvalidepochnanoseconds
 bool is_valid_epoch_nanoseconds(Crypto::SignedBigInteger const& epoch_nanoseconds)
 {
-    // 1. If ℝ(epochNanoseconds) < nsMinInstant or ℝ(epochNanoseconds) > nsMaxInstant, then
-    if (epoch_nanoseconds < NANOSECONDS_MIN_INSTANT || epoch_nanoseconds > NANOSECONDS_MAX_INSTANT) {
-        // a. Return false.
-        return false;
-    }
-
-    // 2. Return true.
-    return true;
+    // 1. If ℝ(epochNanoseconds) < nsMinInstant or ℝ(epochNanoseconds) > nsMaxInstant, return false; else return true.
+    return epoch_nanoseconds >= NANOSECONDS_MIN_INSTANT && epoch_nanoseconds <= NANOSECONDS_MAX_INSTANT;
 }
 
 // 8.5.2 CreateTemporalInstant ( epochNanoseconds [ , newTarget ] ), https://tc39.es/proposal-temporal/#sec-temporal-isvalidepochnanoseconds
@@ -127,7 +121,7 @@ ThrowCompletionOr<GC::Ref<Instant>> to_temporal_instant(VM& vm, Value item)
     VERIFY(offset_string.has_value() || z_designator);
     VERIFY(!offset_string.has_value() || !z_designator);
 
-    // 5. If parsed.[[TimeZone]].[[Z]] is true, let offsetNanoseconds be 0; otherwise, let offsetNanoseconds be
+    // 5. If parsed.[[TimeZone]].[[Z]] is true, let offsetNanoseconds be 0; else, let offsetNanoseconds be
     //    ! ParseDateTimeUTCOffset(parsed.[[TimeZone]].[[OffsetString]]).
     auto offset_nanoseconds = z_designator ? 0.0 : parse_date_time_utc_offset(*offset_string);
 

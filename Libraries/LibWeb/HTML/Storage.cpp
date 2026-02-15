@@ -10,6 +10,7 @@
 #include <LibGC/RootVector.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/Bindings/StoragePrototype.h>
+#include <LibWeb/DOM/Document.h>
 #include <LibWeb/HTML/Navigable.h>
 #include <LibWeb/HTML/Storage.h>
 #include <LibWeb/HTML/StorageEvent.h>
@@ -38,7 +39,7 @@ Storage::Storage(JS::Realm& realm, Type type, GC::Ref<StorageAPI::StorageBottle>
     , m_storage_bottle(move(storage_bottle))
 {
     m_legacy_platform_object_flags = LegacyPlatformObjectFlags {
-        .supports_indexed_properties = true,
+        .supports_indexed_properties = false,
         .supports_named_properties = true,
         .has_indexed_property_setter = true,
         .has_named_property_setter = true,
@@ -61,6 +62,7 @@ void Storage::initialize(JS::Realm& realm)
 
 void Storage::finalize()
 {
+    Base::finalize();
     all_storages().remove(*this);
 }
 
@@ -208,10 +210,15 @@ void Storage::broadcast(Optional<String> const& key, Optional<String> const& old
         if (type() == Type::Session) {
             auto& storage_document = *relevant_settings_object(storage).responsible_document();
 
-            // NOTE: It is possible the remote storage may have not been fully teared down immediately at the point it's document is made inactive.
+            // NB: It is possible the remote storage may have not been fully teared down immediately at the point it's
+            //     document is made inactive.
             if (!storage_document.navigable())
                 continue;
-            VERIFY(this_document.navigable());
+
+            // NB: It is possible for this storage's document to have lost its navigable if script holds a reference to
+            //     the Storage object after its browsing context has navigated to a new document.
+            if (!this_document.navigable())
+                continue;
 
             if (storage_document.navigable()->traversable_navigable() != this_document.navigable()->traversable_navigable())
                 continue;

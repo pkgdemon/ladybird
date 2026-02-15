@@ -125,7 +125,7 @@ TEST_CASE(threaded_promise_instantly_resolved)
 
     auto promise = Core::ThreadedPromise<int>::create();
 
-    auto thread = Threading::Thread::construct([&, promise] {
+    auto thread = Threading::Thread::construct("PromiseResolver"sv, [&, promise] {
         thread_id = pthread_self();
         promise->resolve(42);
         return 0;
@@ -162,7 +162,7 @@ TEST_CASE(threaded_promise_resolved_later)
 
     auto promise = Core::ThreadedPromise<int>::create();
 
-    auto thread = Threading::Thread::construct([&, promise] {
+    auto thread = Threading::Thread::construct("PromiseResolver"sv, [&, promise] {
         thread_id = pthread_self();
         while (!unblock_thread)
             MUST(Core::System::sleep_ms(5));

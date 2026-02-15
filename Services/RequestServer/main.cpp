@@ -31,11 +31,13 @@ OwnPtr<ResourceSubstitutionMap> g_resource_substitution_map;
 
 }
 
+#ifndef AK_OS_WINDOWS
 static void handle_signal(int signal)
 {
     VERIFY(signal == SIGINT || signal == SIGTERM);
     Core::EventLoop::current().quit(0);
 }
+#endif
 
 ErrorOr<int> ladybird_main(Main::Arguments arguments)
 {
@@ -70,9 +72,16 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
             RequestServer::g_resource_substitution_map = map.release_value();
     }
 
+#if !defined(AK_OS_WINDOWS)
+    MUST(Core::System::signal(SIGPIPE, SIG_IGN));
+#endif
+
     Core::EventLoop event_loop;
+    // FIXME: Have another way to signal the event loop to gracefully quit on windows.
+#ifndef AK_OS_WINDOWS
     Core::EventLoop::register_signal(SIGINT, handle_signal);
     Core::EventLoop::register_signal(SIGTERM, handle_signal);
+#endif
 
 #if defined(AK_OS_MACOS)
     if (!mach_server_name.is_empty())
@@ -96,7 +105,14 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
             RequestServer::g_disk_cache = cache.release_value();
     }
 
+    // Connections are stored on the stack to ensure they are destroyed before
+    // static destruction begins. This prevents crashes from notifiers trying to
+    // unregister from already-destroyed thread data during process exit.
+    HashMap<int, NonnullRefPtr<RequestServer::ConnectionFromClient>> connections;
+    RequestServer::ConnectionFromClient::set_connections(connections);
+
     auto client = TRY(IPC::take_over_accepted_client_from_system_server<RequestServer::ConnectionFromClient>());
+    client->mark_as_primary_connection();
 
     return event_loop.exec();
 }

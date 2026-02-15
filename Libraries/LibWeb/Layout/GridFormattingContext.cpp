@@ -701,6 +701,14 @@ void GridFormattingContext::initialize_track_sizes(GridDimension dimension)
         if (track.is_gap)
             continue;
 
+        // Normalize fit-content tracks with unresolvable percentage arguments to max-content,
+        // since the percentage cannot be resolved against an indefinite available size.
+        if (!available_size.is_definite()
+            && track.max_track_sizing_function.is_fit_content()
+            && track.max_track_sizing_function.css_size().contains_percentage()) {
+            track.max_track_sizing_function = CSS::GridSize(CSS::Size::make_max_content());
+        }
+
         if (track.min_track_sizing_function.is_fixed(available_size)) {
             track.base_size = track.min_track_sizing_function.css_size().to_px(grid_container(), available_size.to_px_or_zero());
         } else if (track.min_track_sizing_function.is_intrinsic(available_size)) {
@@ -1042,11 +1050,9 @@ void GridFormattingContext::increase_sizes_to_accommodate_spanning_items_crossin
                 track.growth_limit.value() += track.planned_increase;
                 if (track.growth_limit.value() < track.base_size)
                     track.growth_limit = track.base_size;
-                if (available_size.is_definite()) {
-                    auto fit_content_limit = track.max_track_sizing_function.css_size().to_px(grid_container(), available_size.to_px_or_zero());
-                    if (track.growth_limit.value() > fit_content_limit)
-                        track.growth_limit = max(track.base_size, fit_content_limit);
-                }
+                auto fit_content_limit = track.max_track_sizing_function.css_size().to_px(grid_container(), available_size.to_px_or_zero());
+                if (track.growth_limit.value() > fit_content_limit)
+                    track.growth_limit = max(track.base_size, fit_content_limit);
             } else if (!track.growth_limit.has_value()) {
                 // If the affected size is an infinite growth limit, set it to the track’s base size plus the planned increase.
                 track.growth_limit = track.base_size + track.planned_increase;
@@ -1757,9 +1763,17 @@ void GridFormattingContext::resolve_grid_item_sizes(GridDimension dimension)
         };
 
         ItemAlignment used_alignment;
-        if (item.box->is_replaced_box() && item.box->has_natural_width()) {
-            auto width = tentative_size_for_replaced_element(preferred_size);
-            used_alignment = try_compute_size(width, item.preferred_size(dimension));
+        auto hint = item.box->auto_content_box_size();
+        bool has_replaced_size_hint_in_this_axis = false;
+        if (dimension == GridDimension::Column) {
+            has_replaced_size_hint_in_this_axis = hint.has_width() || (hint.has_height() && item.box->has_preferred_aspect_ratio());
+        } else {
+            has_replaced_size_hint_in_this_axis = hint.has_height() || (hint.has_width() && item.box->has_preferred_aspect_ratio());
+        }
+
+        if (item.box->is_replaced_box() && has_replaced_size_hint_in_this_axis) {
+            auto tentative_size = tentative_size_for_replaced_element(preferred_size);
+            used_alignment = try_compute_size(tentative_size, item.preferred_size(dimension));
         } else {
             // OPTIMIZATION: For auto-sized items with stretch/normal alignment and no auto margins, the item stretches
             //               to fill the containing block. We can compute this directly without the expensive
@@ -2077,12 +2091,6 @@ void GridFormattingContext::run(AvailableSpace const& available_space)
             item.used_values.set_indefinite_content_width();
         if (!computed_values.height().is_length())
             item.used_values.set_indefinite_content_height();
-
-        if (item.box->is_replaced_box()) {
-            auto& replaced_box = static_cast<Layout::ReplacedBox const&>(*item.box);
-            // FIXME: This const_cast is gross.
-            const_cast<Layout::ReplacedBox&>(replaced_box).prepare_for_replaced_layout();
-        }
     }
 
     // Do the first pass of resolving grid items box metrics to compute values that are independent of a track width
@@ -2121,7 +2129,7 @@ void GridFormattingContext::run(AvailableSpace const& available_space)
     for (auto& grid_item : m_grid_items) {
         CSSPixelPoint margin_offset = { grid_item.used_values.margin_box_left(), grid_item.used_values.margin_box_top() };
         auto const grid_area_rect = get_grid_area_rect(grid_item);
-        grid_item.used_values.offset = grid_area_rect.top_left() + margin_offset;
+        grid_item.used_values.set_content_offset(grid_area_rect.top_left() + margin_offset);
         compute_inset(grid_item.box, grid_area_rect.size());
 
         auto available_space_for_children = AvailableSpace(AvailableSize::make_definite(grid_item.used_values.content_width()), AvailableSize::make_definite(grid_item.used_values.content_height()));
@@ -2163,10 +2171,9 @@ void GridFormattingContext::run(AvailableSpace const& available_space)
 }
 
 // https://www.w3.org/TR/css-grid-2/#abspos-items
-void GridFormattingContext::layout_absolutely_positioned_element(Box const& box)
+AbsposContainingBlockInfo GridFormattingContext::resolve_abspos_containing_block_info(Box const& box)
 {
-    auto& box_state = m_state.get_mutable(box);
-    auto const& computed_values = box.computed_values();
+    auto& abspos_box_state = m_state.get_mutable(box);
 
     auto grid_area_rect = [&] -> CSSPixelRect {
         // NOTE: Grid areas form containing blocks for abspos elements, but
@@ -2187,7 +2194,7 @@ void GridFormattingContext::layout_absolutely_positioned_element(Box const& box)
             return get_grid_area_rect(item);
         }
 
-        GridItem item { as<Box>(*containing_grid_item), box_state, {}, {}, {}, {} };
+        GridItem item { as<Box>(*containing_grid_item), abspos_box_state, {}, {}, {}, {} };
         auto is_auto_row = is_auto_positioned_track(computed_values.grid_row_start(), computed_values.grid_row_end());
         auto is_auto_column = is_auto_positioned_track(computed_values.grid_column_start(), computed_values.grid_column_end());
 
@@ -2204,91 +2211,14 @@ void GridFormattingContext::layout_absolutely_positioned_element(Box const& box)
         return get_grid_area_rect(item);
     }();
 
-    auto available_width = AvailableSize::make_definite(grid_area_rect.width());
-    auto available_height = AvailableSize::make_definite(grid_area_rect.height());
-    AvailableSpace available_space { available_width, available_height };
-
-    // The border computed values are not changed by the compute_height & width calculations below.
-    // The spec only adjusts and computes sizes, insets and margins.
-    box_state.border_left = box.computed_values().border_left().width;
-    box_state.border_right = box.computed_values().border_right().width;
-    box_state.border_top = box.computed_values().border_top().width;
-    box_state.border_bottom = box.computed_values().border_bottom().width;
-    box_state.padding_left = box.computed_values().padding().left().to_px_or_zero(grid_container(), grid_area_rect.width());
-    box_state.padding_right = box.computed_values().padding().right().to_px_or_zero(grid_container(), grid_area_rect.width());
-    box_state.padding_top = box.computed_values().padding().top().to_px_or_zero(grid_container(), grid_area_rect.width());
-    box_state.padding_bottom = box.computed_values().padding().bottom().to_px_or_zero(grid_container(), grid_area_rect.width());
-
-    compute_width_for_absolutely_positioned_element(box, available_space);
-
-    // NOTE: We compute height before *and* after doing inside layout.
-    //       This is done so that inside layout can resolve percentage heights.
-    //       In some situations, e.g with non-auto top & bottom values, the height can be determined early.
-    compute_height_for_absolutely_positioned_element(box, available_space, BeforeOrAfterInsideLayout::Before);
-
-    auto independent_formatting_context = layout_inside(box, LayoutMode::Normal, box_state.available_inner_space_or_constraints_from(available_space));
-
-    compute_height_for_absolutely_positioned_element(box, available_space, BeforeOrAfterInsideLayout::After);
-
-    if (computed_values.inset().left().is_auto() && computed_values.inset().right().is_auto()) {
-        auto width_left_for_alignment = grid_area_rect.width() - box_state.margin_box_width();
-        switch (alignment_for_item(box, GridDimension::Column)) {
-        case Alignment::Normal:
-        case Alignment::Stretch:
-            break;
-        case Alignment::Center:
-            box_state.inset_left = width_left_for_alignment / 2;
-            box_state.inset_right = width_left_for_alignment / 2;
-            break;
-        case Alignment::Start:
-            box_state.inset_right = width_left_for_alignment;
-            break;
-        case Alignment::End:
-            box_state.inset_left = width_left_for_alignment;
-            break;
-        default:
-            break;
-        }
-    }
-
-    if (computed_values.inset().top().is_auto() && computed_values.inset().bottom().is_auto()) {
-        auto height_left_for_alignment = grid_area_rect.height() - box_state.margin_box_height();
-        switch (alignment_for_item(box, GridDimension::Row)) {
-        case Alignment::Baseline:
-            // FIXME: Not implemented
-        case Alignment::Stretch:
-        case Alignment::Normal:
-            break;
-        case Alignment::Start:
-        case Alignment::SelfStart:
-            box_state.inset_bottom = height_left_for_alignment;
-            break;
-        case Alignment::End:
-        case Alignment::SelfEnd: {
-            box_state.inset_top = height_left_for_alignment;
-            break;
-        }
-        case Alignment::Center:
-            box_state.inset_top = height_left_for_alignment / 2;
-            box_state.inset_bottom = height_left_for_alignment / 2;
-            break;
-        default:
-            break;
-        }
-    }
-
-    // If an absolutely positioned element’s containing block is generated by a grid container,
-    // the containing block corresponds to the grid area determined by its grid-placement properties.
-    // The offset properties (top/right/bottom/left) then indicate offsets inwards from the corresponding
-    // edges of this containing block, as normal.
-    CSSPixelPoint used_offset;
-    used_offset.set_x(grid_area_rect.x() + box_state.inset_left + box_state.margin_box_left());
-    used_offset.set_y(grid_area_rect.y() + box_state.inset_top + box_state.margin_box_top());
-
-    box_state.set_content_offset(used_offset);
-
-    if (independent_formatting_context)
-        independent_formatting_context->parent_context_did_dimension_child_root_box();
+    // Grid always uses InsetFromRect — alignment handles auto inset cases
+    return {
+        grid_area_rect,
+        AbsposAxisMode::InsetFromRect,
+        AbsposAxisMode::InsetFromRect,
+        alignment_for_item(box, GridDimension::Column),
+        alignment_for_item(box, GridDimension::Row),
+    };
 }
 
 void GridFormattingContext::parent_context_did_dimension_child_root_box()
@@ -2303,10 +2233,7 @@ void GridFormattingContext::parent_context_did_dimension_child_root_box()
         return IterationDecision::Continue;
     });
 
-    for (auto const& child : grid_container().contained_abspos_children()) {
-        auto const& box = as<Box>(*child);
-        layout_absolutely_positioned_element(box);
-    }
+    layout_absolutely_positioned_children();
 }
 
 void GridFormattingContext::determine_intrinsic_size_of_grid_container(AvailableSpace const& available_space)

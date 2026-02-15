@@ -30,6 +30,7 @@
 #include <LibWeb/HTML/DocumentState.h>
 #include <LibWeb/HTML/HTMLIFrameElement.h>
 #include <LibWeb/HTML/HTMLInputElement.h>
+#include <LibWeb/HTML/History.h>
 #include <LibWeb/HTML/HistoryHandlingBehavior.h>
 #include <LibWeb/HTML/Navigable.h>
 #include <LibWeb/HTML/Navigation.h>
@@ -170,6 +171,10 @@ Navigable::Navigable(GC::Ref<Page> page, bool is_svg_page)
     , m_event_handler({}, *this)
     , m_is_svg_page(is_svg_page)
     , m_backing_store_manager(heap().allocate<Painting::BackingStoreManager>(*this))
+    , m_rendering_thread([page_client = &page->client()](Gfx::IntRect const& viewport_rect, i32 bitmap_id) {
+        if (page_client)
+            page_client->page_did_paint(viewport_rect, bitmap_id);
+    })
 {
     all_navigables().set(*this);
 
@@ -980,7 +985,7 @@ static void perform_navigation_params_fetch(JS::Realm& realm, GC::Ref<Navigation
             ongoing_navigation_changed_observer->set_ongoing_navigation_changed({});
 
             if (continuation_reason == NavigationParamsFetchStateHolder::ContinuationReason::OngoingNavigationChanged) {
-                if (!state_holder->navigable->ongoing_navigation().has<String>() || state_holder->navigable->ongoing_navigation().get<String>() != *state_holder->navigation_id) {
+                if (state_holder->navigable->ongoing_navigation() != *state_holder->navigation_id) {
                     state_holder->fetch_controller->abort(realm, {});
                     top_level_completion_steps->function()(Navigable::NullOrError {});
                     return;
@@ -989,7 +994,7 @@ static void perform_navigation_params_fetch(JS::Realm& realm, GC::Ref<Navigation
         }
 
         // 8. If request's body is null, then set entry's document state's resource to null.
-        if (!state_holder->request->body().has<Empty>()) {
+        if (state_holder->request->body().has<Empty>()) {
             state_holder->entry->document_state()->set_resource(Empty {});
         }
 
@@ -1326,6 +1331,53 @@ static void create_navigation_params_by_fetching(GC::Ptr<SessionHistoryEntry> en
     }));
 }
 
+// Helper for populate_session_history_entry_document: runs steps 7 and 8
+static void finalize_session_history_entry(
+    GC::Ptr<SessionHistoryEntry> entry,
+    Navigable::NavigationParamsVariant const& received_navigation_params,
+    bool saveExtraDocumentState,
+    GC::Ptr<GC::Function<void()>> completion_steps)
+{
+    // 7. If entry's document state's document is not null, then:
+    if (entry->document()) {
+        // 1. Set entry's document state's ever populated to true.
+        entry->document_state()->set_ever_populated(true);
+
+        // 2. If saveExtraDocumentState is true:
+        if (saveExtraDocumentState) {
+            // 1. Let document be entry's document state's document.
+            auto document = entry->document();
+
+            // 2. Set entry's document state's origin to document's origin.
+            entry->document_state()->set_origin(document->origin());
+
+            // 3. If document's URL requires storing the policy container in history, then:
+            if (url_requires_storing_the_policy_container_in_history(document->url())) {
+                // 1. Assert: navigationParams is a navigation params (i.e., neither null nor a non-fetch scheme navigation params).
+                VERIFY(received_navigation_params.has<GC::Ref<NavigationParams>>());
+
+                // 2. Set entry's document state's history policy container to navigationParams's policy container.
+                entry->document_state()->set_history_policy_container(GC::Ref { *received_navigation_params.get<GC::Ref<NavigationParams>>()->policy_container });
+            }
+        }
+
+        // 3. If entry's document state's request referrer is "client", and navigationParams is a navigation params (i.e., neither null nor a non-fetch scheme navigation params), then:
+        if (entry->document_state()->request_referrer() == Fetch::Infrastructure::Request::Referrer::Client
+            && received_navigation_params.has<GC::Ref<NavigationParams>>()
+            && received_navigation_params.get<GC::Ref<NavigationParams>>()->request) {
+            // 1. Assert: navigationParams's request is not null.
+            // NB: We don't perform this assertion because srcdoc navigations create NavigationParams with a null request.
+
+            // 2. Set entry's document state's request referrer to navigationParams's request's referrer.
+            entry->document_state()->set_request_referrer(received_navigation_params.get<GC::Ref<NavigationParams>>()->request->referrer());
+        }
+    }
+
+    // 8. Run completionSteps.
+    if (completion_steps)
+        completion_steps->function()();
+}
+
 // https://html.spec.whatwg.org/multipage/browsing-the-web.html#populating-a-session-history-entry
 void Navigable::populate_session_history_entry_document(
     GC::Ptr<SessionHistoryEntry> entry,
@@ -1364,7 +1416,7 @@ void Navigable::populate_session_history_entry_document(
                 return;
 
             // 1. If navigable's ongoing navigation no longer equals navigationId, then run completionSteps and abort these steps.
-            if (navigation_id.has_value() && (!ongoing_navigation().has<String>() || ongoing_navigation().get<String>() != *navigation_id)) {
+            if (navigation_id.has_value() && ongoing_navigation() != navigation_id) {
                 if (completion_steps) {
                     // NB: Use Core::Promise to signal SessionHistoryTraversalQueue that it can continue to execute next entry.
                     signal_to_continue_session_history_processing->resolve({});
@@ -1453,47 +1505,30 @@ void Navigable::populate_session_history_entry_document(
             // 6. Otherwise, if navigationParams's response's status is not 204 and is not 205, then set entry's document state's document to the result of
             //    loading a document given navigationParams, sourceSnapshotParams, and entry's document state's initiator origin.
             else if (auto const& response = received_navigation_params.get<GC::Ref<NavigationParams>>()->response; response->status() != 204 && response->status() != 205) {
-                auto document = load_document(received_navigation_params.get<GC::Ref<NavigationParams>>(), signal_to_continue_session_history_processing);
+                auto navigation_params = received_navigation_params.get<GC::Ref<NavigationParams>>();
+                auto body = navigation_params->response->body();
+
+                // Get sniff bytes for MIME type detection. For streaming responses where bytes
+                // haven't arrived yet, we must wait asynchronously.
+                auto sniff_bytes = body ? body->sniff_bytes_if_available() : Optional<ReadonlyBytes> { ReadonlyBytes {} };
+                if (!sniff_bytes.has_value()) {
+                    // Async path: bytes not yet available, wait for them
+                    body->wait_for_sniff_bytes(GC::create_function(heap(),
+                        [entry, navigation_params, signal_to_continue_session_history_processing,
+                            received_navigation_params, saveExtraDocumentState, completion_steps](ReadonlyBytes sniff_bytes) {
+                            auto document = load_document(navigation_params, signal_to_continue_session_history_processing, sniff_bytes);
+                            entry->document_state()->set_document(document);
+                            finalize_session_history_entry(entry, received_navigation_params, saveExtraDocumentState, completion_steps);
+                        }));
+                    return;
+                }
+
+                // Sync path: bytes available immediately
+                auto document = load_document(navigation_params, signal_to_continue_session_history_processing, sniff_bytes.value());
                 entry->document_state()->set_document(document);
             }
 
-            // 7. If entry's document state's document is not null, then:
-            if (entry->document()) {
-                // 1. Set entry's document state's ever populated to true.
-                entry->document_state()->set_ever_populated(true);
-
-                // 2. If saveExtraDocumentState is true:
-                if (saveExtraDocumentState) {
-                    // 1. Let document be entry's document state's document.
-                    auto document = entry->document();
-
-                    // 2. Set entry's document state's origin to document's origin.
-                    entry->document_state()->set_origin(document->origin());
-
-                    // 3. If document's URL requires storing the policy container in history, then:
-                    if (url_requires_storing_the_policy_container_in_history(document->url())) {
-                        // 1. Assert: navigationParams is a navigation params (i.e., neither null nor a non-fetch scheme navigation params).
-                        VERIFY(received_navigation_params.has<GC::Ref<NavigationParams>>());
-
-                        // 2. Set entry's document state's history policy container to navigationParams's policy container.
-                        entry->document_state()->set_history_policy_container(GC::Ref { *received_navigation_params.get<GC::Ref<NavigationParams>>()->policy_container });
-                    }
-                }
-
-                // 3. If entry's document state's request referrer is "client", and navigationParams is a navigation params (i.e., neither null nor a non-fetch scheme navigation params), then:
-                if (entry->document_state()->request_referrer() == Fetch::Infrastructure::Request::Referrer::Client
-                    && (!received_navigation_params.has<NullOrError>() && received_navigation_params.has<GC::Ref<NonFetchSchemeNavigationParams>>())) {
-                    // 1. Assert: navigationParams's request is not null.
-                    VERIFY(received_navigation_params.has<GC::Ref<NavigationParams>>() && received_navigation_params.get<GC::Ref<NavigationParams>>()->request);
-
-                    // 2. Set entry's document state's request referrer to navigationParams's request's referrer.
-                    entry->document_state()->set_request_referrer(received_navigation_params.get<GC::Ref<NavigationParams>>()->request->referrer());
-                }
-            }
-
-            // 8. Run completionSteps.
-            if (completion_steps)
-                completion_steps->function()();
+            finalize_session_history_entry(entry, received_navigation_params, saveExtraDocumentState, completion_steps);
         }));
     });
 
@@ -1607,6 +1642,15 @@ WebIDL::ExceptionOr<void> Navigable::navigate(NavigateParams params)
 // https://html.spec.whatwg.org/multipage/browsing-the-web.html#navigate
 void Navigable::begin_navigation(NavigateParams params)
 {
+    // AD-HOC: Not in the spec but we should not navigate a navigable that has been destroyed.
+    //         This can happen when a session history traversal step for creating a child navigable
+    //         runs after the navigable has been destroyed (e.g. an iframe is removed before its
+    //         post-connection steps finish processing). Without this check, we would call
+    //         set_delaying_load_events(true) below, creating a DocumentLoadEventDelayer on the
+    //         parent document that is never cleared.
+    if (has_been_destroyed())
+        return;
+
     // AD-HOC: Not in the spec but subsequent steps will fail if the navigable doesn't have an active window.
     if (!active_window())
         return;
@@ -1749,7 +1793,7 @@ void Navigable::begin_navigation(NavigateParams params)
 
     // 20. If url's scheme is "javascript", then:
     if (url.scheme() == "javascript"sv) {
-        // 1. Queue a global task on the navigation and traversal task source given navigable's active window to navigate to a javascript: URL given navigable, url, historyHandling, sourceSnapshotParams, initiatorOriginSnapshot, userInvolvement, cspNavigationType, and initialInsertion.
+        // 1. Queue a global task on the navigation and traversal task source given navigable's active window to navigate to a javascript: URL given navigable, url, historyHandling, sourceSnapshotParams, initiatorOriginSnapshot, userInvolvement, cspNavigationType, initialInsertion, and navigationId.
         VERIFY(active_window());
         queue_global_task(Task::Source::NavigationAndTraversal, *active_window(), GC::create_function(heap(), [this, url, history_handling, source_snapshot_params, initiator_origin_snapshot, user_involvement, csp_navigation_type, initial_insertion, navigation_id] {
             navigate_to_a_javascript_url(url, to_history_handling_behavior(history_handling), source_snapshot_params, initiator_origin_snapshot, user_involvement, csp_navigation_type, initial_insertion, navigation_id);
@@ -1822,7 +1866,7 @@ void Navigable::begin_navigation(NavigateParams params)
         auto unload_prompt_canceled = traversable_navigable()->check_if_unloading_is_canceled(this->active_document()->inclusive_descendant_navigables());
 
         // 2. If unloadPromptCanceled is not "continue", or navigable's ongoing navigation is no longer navigationId:
-        if (unload_prompt_canceled != TraversableNavigable::CheckIfUnloadingIsCanceledResult::Continue || !ongoing_navigation().has<String>() || ongoing_navigation().get<String>() != navigation_id) {
+        if (unload_prompt_canceled != TraversableNavigable::CheckIfUnloadingIsCanceledResult::Continue || ongoing_navigation() != navigation_id) {
             // FIXME: 1. Invoke WebDriver BiDi navigation failed with navigable and a new WebDriver BiDi navigation status whose id is navigationId, status is "canceled", and url is url.
 
             // 2. Abort these steps.
@@ -2104,7 +2148,8 @@ GC::Ptr<DOM::Document> Navigable::evaluate_javascript_url(URL::URL const& url, U
         user_involvement);
 
     // 17. Return the result of loading an HTML document given navigationParams.
-    return load_document(navigation_params, Core::Promise<Empty>::construct());
+    // NB: The response body is a known byte sequence, so we can pass it directly for sniffing.
+    return load_document(navigation_params, Core::Promise<Empty>::construct(), result.bytes());
 }
 
 // https://html.spec.whatwg.org/multipage/browsing-the-web.html#navigate-to-a-javascript:-url
@@ -2115,14 +2160,18 @@ void Navigable::navigate_to_a_javascript_url(URL::URL const& url, HistoryHandlin
     // 1. Assert: historyHandling is "replace".
     VERIFY(history_handling == HistoryHandlingBehavior::Replace);
 
-    // 2. Set the ongoing navigation for targetNavigable to null.
+    // 2. If targetNavigable's ongoing navigation is no longer navigationId, then return.
+    if (ongoing_navigation() != navigation_id)
+        return;
+
+    // 3. Set the ongoing navigation for targetNavigable to null.
     set_ongoing_navigation({});
 
-    // 3. If initiatorOrigin is not same origin-domain with targetNavigable's active document's origin, then return.
+    // 4. If initiatorOrigin is not same origin-domain with targetNavigable's active document's origin, then return.
     if (!initiator_origin.is_same_origin_domain(active_document()->origin()))
         return;
 
-    // 4. Let request be a new request whose URL is url and whose policy container is sourceSnapshotParams's source policy container.
+    // 5. Let request be a new request whose URL is url and whose policy container is sourceSnapshotParams's source policy container.
     auto request = Fetch::Infrastructure::Request::create(vm);
     request->set_url(url);
     request->set_policy_container(source_snapshot_params->source_policy_container);
@@ -2130,14 +2179,14 @@ void Navigable::navigate_to_a_javascript_url(URL::URL const& url, HistoryHandlin
     // AD-HOC: See https://github.com/whatwg/html/issues/4651, requires some investigation to figure out what we should be setting here.
     request->set_client(source_snapshot_params->fetch_client);
 
-    // 5. If the result of should navigation request of type be blocked by Content Security Policy? given request and cspNavigationType is "Blocked", then return.
+    // 6. If the result of should navigation request of type be blocked by Content Security Policy? given request and cspNavigationType is "Blocked", then return.
     if (ContentSecurityPolicy::should_navigation_request_of_type_be_blocked_by_content_security_policy(request, csp_navigation_type) == ContentSecurityPolicy::Directives::Directive::Result::Blocked)
         return;
 
-    // 6. Let newDocument be the result of evaluating a javascript: URL given targetNavigable, url, initiatorOrigin, and userInvolvement.
+    // 7. Let newDocument be the result of evaluating a javascript: URL given targetNavigable, url, initiatorOrigin, and userInvolvement.
     auto new_document = evaluate_javascript_url(url, initiator_origin, user_involvement, navigation_id);
 
-    // 7. If newDocument is null:
+    // 8. If newDocument is null:
     if (!new_document) {
         // 1. If initialInsertion is true and targetNavigable's active document's is initial about:blank is true,
         //    then run the iframe load event steps given targetNavigable's container.
@@ -2150,16 +2199,16 @@ void Navigable::navigate_to_a_javascript_url(URL::URL const& url, HistoryHandlin
         return;
     }
 
-    // 8. Assert: initiatorOrigin is newDocument's origin.
+    // 9. Assert: initiatorOrigin is newDocument's origin.
     VERIFY(initiator_origin == new_document->origin());
 
-    // 9. Let entryToReplace be targetNavigable's active session history entry.
+    // 10. Let entryToReplace be targetNavigable's active session history entry.
     auto entry_to_replace = active_session_history_entry();
 
-    // 10. Let oldDocState be entryToReplace's document state.
+    // 11. Let oldDocState be entryToReplace's document state.
     auto old_doc_state = entry_to_replace->document_state();
 
-    // 11. Let documentState be a new document state with
+    // 12. Let documentState be a new document state with
     //     document: newDocument
     //     history policy container: a clone of the oldDocState's history policy container if it is non-null; null otherwise
     //     request referrer: oldDocState's request referrer
@@ -2181,14 +2230,14 @@ void Navigable::navigate_to_a_javascript_url(URL::URL const& url, HistoryHandlin
     document_state->set_ever_populated(true);
     document_state->set_navigable_target_name(old_doc_state->navigable_target_name());
 
-    // 12. Let historyEntry be a new session history entry, with
+    // 13. Let historyEntry be a new session history entry, with
     //     URL: entryToReplace's URL
     //     document state: documentState
     GC::Ref<SessionHistoryEntry> history_entry = *heap().allocate<SessionHistoryEntry>();
     history_entry->set_url(entry_to_replace->url());
     history_entry->set_document_state(document_state);
 
-    // 13. Append session history traversal steps to targetNavigable's traversable to finalize a cross-document navigation with targetNavigable, historyHandling, userInvolvement, and historyEntry.
+    // 14. Append session history traversal steps to targetNavigable's traversable to finalize a cross-document navigation with targetNavigable, historyHandling, userInvolvement, and historyEntry.
     traversable_navigable()->append_session_history_traversal_steps(GC::create_function(heap(), [this, history_entry, history_handling, user_involvement] {
         // NB: Use Core::Promise to signal SessionHistoryTraversalQueue that it can continue to execute next entry.
         auto signal_to_continue_session_history_processing = Core::Promise<Empty>::construct();
@@ -2199,15 +2248,45 @@ void Navigable::navigate_to_a_javascript_url(URL::URL const& url, HistoryHandlin
 }
 
 // https://html.spec.whatwg.org/multipage/browsing-the-web.html#reload
-void Navigable::reload(UserNavigationInvolvement user_involvement)
+void Navigable::reload(Optional<SerializationRecord> navigation_api_state, UserNavigationInvolvement user_involvement)
 {
-    // 1. Set navigable's active session history entry's document state's reload pending to true.
+    // 1. If userInvolvement is not "browser UI", then:
+    if (user_involvement != UserNavigationInvolvement::BrowserUI) {
+        // 1. Let navigation be navigable's active window's navigation API.
+        auto active_window = this->active_window();
+        VERIFY(active_window);
+        auto navigation = active_window->navigation();
+
+        // 2. Let destinationNavigationAPIState be navigable's active session history entry's navigation API state.
+        auto destination_navigation_api_state = active_session_history_entry()->navigation_api_state();
+
+        // 3. If navigationAPIState is not null, then set destinationNavigationAPIState to navigationAPIState.
+        if (navigation_api_state.has_value())
+            destination_navigation_api_state = *navigation_api_state;
+
+        // 4. Let continue be the result of firing a push/replace/reload navigate event at navigation with
+        //    navigationType set to "reload", isSameDocument set to false, userInvolvement set to userInvolvement,
+        //    destinationURL set to navigable's active session history entry's URL, navigationAPIState set to
+        //    destinationNavigationAPIState, and apiMethodTracker set to apiMethodTracker.
+        auto continue_ = navigation->fire_a_push_replace_reload_navigate_event(Bindings::NavigationType::Reload, active_session_history_entry()->url(), false, user_involvement, nullptr, {}, destination_navigation_api_state);
+
+        // 5. If continue is false, then return.
+        if (!continue_)
+            return;
+    }
+
+    // 1. If navigationAPIState is not null, then set navigable's active session history entry's navigation API state
+    //    to navigationAPIState.
+    if (navigation_api_state.has_value())
+        active_session_history_entry()->set_navigation_api_state(navigation_api_state.release_value());
+
+    // 2. Set navigable's active session history entry's document state's reload pending to true.
     active_session_history_entry()->document_state()->set_reload_pending(true);
 
-    // 2. Let traversable be navigable's traversable navigable.
+    // 3. Let traversable be navigable's traversable navigable.
     auto traversable = traversable_navigable();
 
-    // 3. Append the following session history traversal steps to traversable:
+    // 4. Append the following session history traversal steps to traversable:
     traversable->append_session_history_traversal_steps(GC::create_function(heap(), [traversable, user_involvement] {
         // NB: Use Core::Promise to signal SessionHistoryTraversalQueue that it can continue to execute next entry.
         auto signal_to_continue_session_history_processing = Core::Promise<Empty>::construct();
@@ -2557,7 +2636,7 @@ bool Navigable::has_a_rendering_opportunity() const
     // Rendering opportunities typically occur at regular intervals.
 
     // FIXME: Return `false` here if we're an inactive browser tab.
-    return is_ready_to_paint();
+    return true;
 }
 
 // https://html.spec.whatwg.org/multipage/nav-history-apis.html#inform-the-navigation-api-about-child-navigable-destruction
@@ -2726,52 +2805,21 @@ void Navigable::set_has_session_history_entry_and_ready_for_navigation()
     }
 }
 
-bool Navigable::is_ready_to_paint() const
-{
-    return m_number_of_queued_rasterization_tasks <= 1;
-}
-
 void Navigable::ready_to_paint()
 {
-    m_number_of_queued_rasterization_tasks--;
-    VERIFY(m_number_of_queued_rasterization_tasks >= 0 && m_number_of_queued_rasterization_tasks < 2);
+    m_rendering_thread.ready_to_paint();
 }
 
-void Navigable::paint_next_frame()
-{
-    if (!is_top_level_traversable())
-        return;
-
-    auto [backing_store_id, painting_surface] = m_backing_store_manager->acquire_store_for_next_frame();
-    if (!painting_surface)
-        return;
-
-    VERIFY(m_number_of_queued_rasterization_tasks <= 1);
-    m_number_of_queued_rasterization_tasks++;
-
-    auto viewport_rect = page().css_to_device_rect(this->viewport_rect()).to_type<int>();
-    PaintConfig paint_config { .paint_overlay = true, .should_show_line_box_borders = m_should_show_line_box_borders, .canvas_fill_rect = Gfx::IntRect { {}, viewport_rect.size() } };
-    auto page_client = &page().top_level_traversable()->page().client();
-    start_display_list_rendering(*painting_surface, paint_config, [page_client, viewport_rect, backing_store_id] {
-        if (!page_client)
-            return;
-        page_client->page_did_paint(viewport_rect, backing_store_id);
-    });
-}
-
-void Navigable::start_display_list_rendering(Gfx::PaintingSurface& painting_surface, PaintConfig paint_config, Function<void()>&& callback)
+void Navigable::record_display_list_and_scroll_state(PaintConfig paint_config)
 {
     m_needs_repaint = false;
     auto document = active_document();
-    if (!document) {
-        callback();
+    if (!document)
         return;
-    }
+
     auto display_list = document->record_display_list(paint_config);
-    if (!display_list) {
-        callback();
+    if (!display_list)
         return;
-    }
 
     auto& document_paintable = *document->paintable();
     Painting::ScrollStateSnapshotByDisplayList scroll_state_snapshot_by_display_list;
@@ -2793,7 +2841,26 @@ void Navigable::start_display_list_rendering(Gfx::PaintingSurface& painting_surf
         return TraversalDecision::Continue;
     });
 
-    m_rendering_thread.enqueue_rendering_task(*display_list, move(scroll_state_snapshot_by_display_list), painting_surface, move(callback));
+    m_rendering_thread.update_display_list(*display_list, move(scroll_state_snapshot_by_display_list));
+}
+
+void Navigable::paint_next_frame()
+{
+    if (!is_top_level_traversable())
+        return;
+
+    auto viewport_rect = page().css_to_device_rect(this->viewport_rect()).to_type<int>();
+    PaintConfig paint_config { .paint_overlay = true, .should_show_line_box_borders = m_should_show_line_box_borders, .canvas_fill_rect = Gfx::IntRect { {}, viewport_rect.size() } };
+
+    record_display_list_and_scroll_state(paint_config);
+
+    m_rendering_thread.present_frame(viewport_rect);
+}
+
+void Navigable::render_screenshot(Gfx::PaintingSurface& painting_surface, PaintConfig paint_config, Function<void()>&& callback)
+{
+    record_display_list_and_scroll_state(paint_config);
+    m_rendering_thread.request_screenshot(painting_surface, move(callback));
 }
 
 RefPtr<Gfx::SkiaBackendContext> Navigable::skia_backend_context() const
@@ -2803,7 +2870,9 @@ RefPtr<Gfx::SkiaBackendContext> Navigable::skia_backend_context() const
 
 GC::Ref<WebIDL::Promise> Navigable::scroll_viewport_by_delta(CSSPixelPoint delta)
 {
-    return perform_a_scroll_of_the_viewport(m_viewport_scroll_offset + delta);
+    auto vv = active_document()->visual_viewport();
+    CSSPixelPoint page_position { CSSPixels(vv->page_left()), CSSPixels(vv->page_top()) };
+    return perform_a_scroll_of_the_viewport(page_position + delta);
 }
 
 // https://drafts.csswg.org/cssom-view/#viewport-perform-a-scroll
@@ -2863,6 +2932,12 @@ GC::Ref<WebIDL::Promise> Navigable::perform_a_scroll_of_the_viewport(CSSPixelPoi
     // NOTE: Clamp to the scrolling area.
     new_viewport_scroll_offset.set_x(max(0.0, min(new_viewport_scroll_offset.x(), scrolling_area.width() - viewport_size().width().to_double())));
     new_viewport_scroll_offset.set_y(max(0.0, min(new_viewport_scroll_offset.y(), scrolling_area.height() - viewport_size().height().to_double())));
+
+    // AD-HOC: If the scroll position would not change, return early to avoid unnecessary display invalidation
+    //         and event loop scheduling (e.g. during momentum scrolling against a boundary).
+    if (new_viewport_scroll_offset.to_type<CSSPixels>() == m_viewport_scroll_offset && visual_dx == 0.0 && visual_dy == 0.0)
+        return WebIDL::create_resolved_promise(doc->realm(), JS::js_undefined());
+
     // FIXME: Get a Promise from this.
     perform_scroll_of_viewport_scrolling_box(new_viewport_scroll_offset.to_type<CSSPixels>());
 
@@ -2871,7 +2946,12 @@ GC::Ref<WebIDL::Promise> Navigable::perform_a_scroll_of_the_viewport(CSSPixelPoi
     //     from this step.
     // FIXME: Get a Promise from this.
     vv->scroll_by({ visual_dx, visual_dy });
-    doc->set_needs_display(InvalidateDisplayList::No);
+    if (visual_dx != 0.0 || visual_dy != 0.0) {
+        doc->set_needs_accumulated_visual_contexts_update(true);
+        doc->set_needs_display(InvalidateDisplayList::Yes);
+    } else {
+        doc->set_needs_display(InvalidateDisplayList::No);
+    }
 
     // 16. Let scrollPromise be a new Promise.
     auto scroll_promise = WebIDL::create_promise(doc->realm());

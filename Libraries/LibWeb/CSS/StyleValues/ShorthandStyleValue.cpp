@@ -10,6 +10,7 @@
 #include <LibWeb/CSS/PropertyID.h>
 #include <LibWeb/CSS/StyleComputer.h>
 #include <LibWeb/CSS/StyleValues/BorderRadiusStyleValue.h>
+#include <LibWeb/CSS/StyleValues/GridAutoFlowStyleValue.h>
 #include <LibWeb/CSS/StyleValues/GridTemplateAreaStyleValue.h>
 #include <LibWeb/CSS/StyleValues/GridTrackPlacementStyleValue.h>
 #include <LibWeb/CSS/StyleValues/GridTrackSizeListStyleValue.h>
@@ -175,6 +176,7 @@ void ShorthandStyleValue::serialize(StringBuilder& builder, SerializationMode mo
     };
 
     // Then special cases
+    // FIXME: overflow-clip-margin needs a special case here for when its longhands aren't identical.
     switch (m_properties.shorthand_property) {
     case PropertyID::All: {
         // NOTE: 'all' can only be serialized in the case all sub-properties share the same CSS-wide keyword, this is
@@ -422,7 +424,7 @@ void ShorthandStyleValue::serialize(StringBuilder& builder, SerializationMode mo
         auto line_height = longhand(PropertyID::LineHeight);
         auto font_family = longhand(PropertyID::FontFamily);
 
-        for (auto const& reset_only_sub_property : { PropertyID::FontFeatureSettings, PropertyID::FontKerning, PropertyID::FontLanguageOverride, PropertyID::FontVariationSettings }) {
+        for (auto const& reset_only_sub_property : { PropertyID::FontFeatureSettings, PropertyID::FontKerning, PropertyID::FontLanguageOverride, PropertyID::FontOpticalSizing, PropertyID::FontVariationSettings }) {
             auto const& value = longhand(reset_only_sub_property);
 
             if (!value->equals(property_initial_value(reset_only_sub_property)))
@@ -634,8 +636,67 @@ void ShorthandStyleValue::serialize(StringBuilder& builder, SerializationMode mo
         serialize_grid_area();
         return;
     }
-        // FIXME: Serialize Grid differently once we support it better!
-    case PropertyID::Grid:
+    case PropertyID::Grid: {
+        // https://drafts.csswg.org/css-grid/#propdef-grid
+        // <'grid-template'> |
+        // <'grid-template-rows'> / [ auto-flow && dense? ] <'grid-auto-columns'>? |
+        // [ auto-flow && dense? ] <'grid-auto-rows'>? / <'grid-template-columns'>
+        auto auto_flow_value = longhand(PropertyID::GridAutoFlow);
+        auto auto_rows_value = longhand(PropertyID::GridAutoRows);
+        auto auto_columns_value = longhand(PropertyID::GridAutoColumns);
+
+        auto is_initial = [](ValueComparingRefPtr<StyleValue const> const& value, PropertyID property) {
+            return *value == *property_initial_value(property);
+        };
+
+        bool auto_flow_is_initial = is_initial(auto_flow_value, PropertyID::GridAutoFlow);
+        bool auto_rows_is_initial = is_initial(auto_rows_value, PropertyID::GridAutoRows);
+        bool auto_columns_is_initial = is_initial(auto_columns_value, PropertyID::GridAutoColumns);
+
+        if (!auto_flow_is_initial || !auto_rows_is_initial || !auto_columns_is_initial) {
+            auto areas_value = longhand(PropertyID::GridTemplateAreas);
+            auto rows_value = longhand(PropertyID::GridTemplateRows);
+            auto columns_value = longhand(PropertyID::GridTemplateColumns);
+
+            bool areas_is_initial = is_initial(areas_value, PropertyID::GridTemplateAreas);
+            bool rows_is_initial = is_initial(rows_value, PropertyID::GridTemplateRows);
+            bool columns_is_initial = is_initial(columns_value, PropertyID::GridTemplateColumns);
+
+            auto& auto_flow = auto_flow_value->as_grid_auto_flow();
+
+            // [ auto-flow && dense? ] <'grid-auto-rows'>? / <'grid-template-columns'>
+            if (auto_flow.is_row() && auto_columns_is_initial && areas_is_initial && rows_is_initial) {
+                builder.append("auto-flow"sv);
+                if (auto_flow.is_dense())
+                    builder.append(" dense"sv);
+                if (!auto_rows_is_initial) {
+                    builder.append(' ');
+                    auto_rows_value->serialize(builder, mode);
+                }
+                builder.append(" / "sv);
+                columns_value->serialize(builder, mode);
+                return;
+            }
+
+            // <'grid-template-rows'> / [ auto-flow && dense? ] <'grid-auto-columns'>?
+            if (auto_flow.is_column() && auto_rows_is_initial && areas_is_initial && columns_is_initial) {
+                rows_value->serialize(builder, mode);
+                builder.append(" / auto-flow"sv);
+                if (auto_flow.is_dense())
+                    builder.append(" dense"sv);
+                if (!auto_columns_is_initial) {
+                    builder.append(' ');
+                    auto_columns_value->serialize(builder, mode);
+                }
+                return;
+            }
+
+            return;
+        }
+
+        // <'grid-template'>
+        [[fallthrough]];
+    }
     case PropertyID::GridTemplate: {
         auto areas_value = longhand(PropertyID::GridTemplateAreas);
         auto rows_value = longhand(PropertyID::GridTemplateRows);
@@ -659,6 +720,7 @@ void ShorthandStyleValue::serialize(StringBuilder& builder, SerializationMode mo
 
         auto construct_rows_string = [&]() {
             StringBuilder inner_builder;
+            size_t area_index = 0;
             for (size_t i = 0; i < rows.grid_track_size_list().list().size(); ++i) {
                 auto track_size_or_line_names = rows.grid_track_size_list().list()[i];
                 if (auto* line_names = track_size_or_line_names.get_pointer<GridLineNames>()) {
@@ -666,24 +728,25 @@ void ShorthandStyleValue::serialize(StringBuilder& builder, SerializationMode mo
                         inner_builder.append(' ');
                     line_names->serialize(inner_builder);
                 }
-                if (areas.grid_template_area().size() > i) {
-                    if (!inner_builder.is_empty())
-                        inner_builder.append(' ');
-                    inner_builder.append("\""sv);
-                    for (size_t y = 0; y < areas.grid_template_area()[i].size(); ++y) {
-                        if (y != 0)
-                            inner_builder.append(' ');
-                        inner_builder.append(areas.grid_template_area()[i][y]);
-                    }
-                    inner_builder.append("\""sv);
-                }
                 if (auto* track_size = track_size_or_line_names.get_pointer<ExplicitGridTrack>()) {
+                    if (area_index < areas.grid_template_area().size()) {
+                        if (!inner_builder.is_empty())
+                            inner_builder.append(' ');
+                        inner_builder.append("\""sv);
+                        for (size_t y = 0; y < areas.grid_template_area()[area_index].size(); ++y) {
+                            if (y != 0)
+                                inner_builder.append(' ');
+                            inner_builder.append(areas.grid_template_area()[area_index][y]);
+                        }
+                        inner_builder.append("\""sv);
+                    }
                     auto track_size_serialization = track_size->to_string(mode);
                     if (track_size_serialization != "auto"sv) {
                         if (!inner_builder.is_empty())
                             inner_builder.append(' ');
                         inner_builder.append(track_size_serialization);
                     }
+                    ++area_index;
                 }
             }
             return MUST(inner_builder.to_string());

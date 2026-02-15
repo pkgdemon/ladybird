@@ -11,7 +11,6 @@
 #include <AK/Vector.h>
 #include <LibJS/Heap/Cell.h>
 #include <LibWeb/CSS/StyleValues/ImageStyleValue.h>
-#include <LibWeb/DOM/Document.h>
 #include <LibWeb/Export.h>
 #include <LibWeb/Forward.h>
 #include <LibWeb/Painting/DisplayListRecordingContext.h>
@@ -118,6 +117,7 @@ public:
     virtual bool is_svg_foreign_object_box() const { return false; }
     virtual bool is_label() const { return false; }
     virtual bool is_replaced_box() const { return false; }
+    virtual bool is_textarea_box() const { return false; }
     virtual bool is_list_item_box() const { return false; }
     virtual bool is_list_item_marker_box() const { return false; }
     virtual bool is_fieldset_box() const { return false; }
@@ -381,5 +381,7 @@ inline Gfx::Font const& NodeWithStyle::first_available_font() const
     // First font for which the character U+0020 (space) is not excluded by a unicode-range
     return computed_values().font_list().font_for_code_point(' ');
 }
+
+bool overflow_value_makes_box_a_scroll_container(CSS::Overflow overflow);
 
 }

@@ -20,7 +20,7 @@ namespace Web::WebGL {
 using namespace Web::HTML;
 
 class WebGL2RenderingContextImpl : public WebGLRenderingContextImpl {
-    WEB_PLATFORM_OBJECT(WebGL2RenderingContextImpl, WebGLRenderingContextImpl);
+    WEB_NON_IDL_PLATFORM_OBJECT(WebGL2RenderingContextImpl, WebGLRenderingContextImpl);
 
 public:
     WebGL2RenderingContextImpl(JS::Realm&, NonnullOwnPtr<OpenGLContext>);
@@ -71,6 +71,7 @@ public:
     void delete_query(GC::Root<WebGLQuery> query);
     void begin_query(WebIDL::UnsignedLong target, GC::Root<WebGLQuery> query);
     void end_query(WebIDL::UnsignedLong target);
+    GC::Root<WebGLQuery> get_query(WebIDL::UnsignedLong target, WebIDL::UnsignedLong pname);
     JS::Value get_query_parameter(GC::Root<WebGLQuery> query, WebIDL::UnsignedLong pname);
     GC::Root<WebGLSampler> create_sampler();
     void delete_sampler(GC::Root<WebGLSampler> sampler);

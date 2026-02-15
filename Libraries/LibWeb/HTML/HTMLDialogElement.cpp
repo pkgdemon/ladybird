@@ -585,7 +585,7 @@ GC::Ptr<HTMLDialogElement> HTMLDialogElement::nearest_clicked_dialog(UIEvents::P
             return current_dialog;
 
         // 2. Set currentNode to currentNode's parent in the flat tree.
-        current_node = current_node->shadow_including_first_ancestor_of_type<HTMLElement>();
+        current_node = current_node->first_flat_tree_ancestor_of_type<HTMLElement>();
     }
 
     // 5. Return null.
@@ -674,6 +674,10 @@ void HTMLDialogElement::attribute_changed(FlyString const& local_name, Optional<
     // 2. If localName is not open, then return.
     if (local_name != "open"_fly_string)
         return;
+
+    // The :open pseudo-class can affect sibling selectors (e.g., dialog:open + sibling),
+    // so we need full subtree + sibling invalidation, not just targeted invalidation.
+    invalidate_style(DOM::StyleInvalidationReason::HTMLDetailsOrDialogOpenAttributeChange);
 
     // 3. If value is null and oldValue is not null, then run the dialog cleanup steps given element.
     if (!value.has_value() && old_value.has_value())

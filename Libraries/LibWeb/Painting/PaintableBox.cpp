@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2022-2023, Andreas Kling <andreas@ladybird.org>
  * Copyright (c) 2022-2025, Sam Atkins <sam@ladybird.org>
- * Copyright (c) 2024-2025, Aliaksandr Kalenik <kalenik.aliaksandr@gmail.com>
+ * Copyright (c) 2024-2026, Aliaksandr Kalenik <kalenik.aliaksandr@gmail.com>
  * Copyright (c) 2025, Jelle Raaijmakers <jelle@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
@@ -10,7 +10,6 @@
 #include <AK/GenericShorthands.h>
 #include <LibGfx/Font/Font.h>
 #include <LibGfx/ImmutableBitmap.h>
-#include <LibWeb/CSS/PropertyID.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/HTML/HTMLHtmlElement.h>
 #include <LibWeb/HTML/Navigable.h>
@@ -137,8 +136,6 @@ PaintableBox::ScrollHandled PaintableBox::set_scroll_offset(CSSPixelPoint offset
     if (!scrollable_overflow_rect.has_value())
         return ScrollHandled::No;
 
-    document().set_needs_to_refresh_scroll_state(true);
-
     auto padding_rect = absolute_padding_box_rect();
     auto max_x_offset = max(scrollable_overflow_rect->width() - padding_rect.width(), 0);
     auto max_y_offset = max(scrollable_overflow_rect->height() - padding_rect.height(), 0);
@@ -149,6 +146,15 @@ PaintableBox::ScrollHandled PaintableBox::set_scroll_offset(CSSPixelPoint offset
     // FIXME: If there is horizontal and vertical scroll ignore only part of the new offset
     if (offset.y() < 0 || scroll_offset() == offset)
         return ScrollHandled::No;
+
+    if (is_viewport_paintable()) {
+        auto navigable = document().navigable();
+        VERIFY(navigable);
+        navigable->perform_scroll_of_viewport_scrolling_box(offset);
+        return ScrollHandled::Yes;
+    }
+
+    document().set_needs_to_refresh_scroll_state(true);
 
     auto& node = layout_node();
     if (auto pseudo_element = node.generated_for_pseudo_element(); pseudo_element.has_value()) {
@@ -170,14 +176,21 @@ PaintableBox::ScrollHandled PaintableBox::set_scroll_offset(CSSPixelPoint offset
     //           the element’s eventual snap target in the block axis as newBlockTarget and the element’s eventual snap
     //           target in the inline axis as newInlineTarget.
 
-    GC::Ref<DOM::EventTarget> const event_target = *dom_node();
+    GC::Ptr<DOM::EventTarget> event_target;
+    if (auto pseudo_element = node.generated_for_pseudo_element(); pseudo_element.has_value())
+        event_target = node.pseudo_element_generator();
+    else
+        event_target = dom_node();
+
+    if (!event_target)
+        return ScrollHandled::Yes;
 
     // 3. If (element, "scroll") is already in doc’s pending scroll events, abort these steps.
-    if (document.pending_scroll_events().contains_slow(DOM::Document::PendingScrollEvent { event_target, HTML::EventNames::scroll }))
+    if (document.pending_scroll_events().contains_slow(DOM::Document::PendingScrollEvent { *event_target, HTML::EventNames::scroll }))
         return ScrollHandled::Yes;
 
     // 4. Append (element, "scroll") to doc’s pending scroll events.
-    document.pending_scroll_events().append({ event_target, HTML::EventNames::scroll });
+    document.pending_scroll_events().append({ *event_target, HTML::EventNames::scroll });
 
     set_needs_display(InvalidateDisplayList::No);
     return ScrollHandled::Yes;
@@ -186,6 +199,28 @@ PaintableBox::ScrollHandled PaintableBox::set_scroll_offset(CSSPixelPoint offset
 PaintableBox::ScrollHandled PaintableBox::scroll_by(int delta_x, int delta_y)
 {
     return set_scroll_offset(scroll_offset().translated(delta_x, delta_y));
+}
+
+void PaintableBox::scroll_into_view(CSSPixelRect rect)
+{
+    auto scrollport = absolute_padding_box_rect();
+    auto current_offset = scroll_offset();
+
+    // Both rect and scrollport are in layout coordinate space (not scroll-adjusted).
+    auto content_rect = rect.translated(-scrollport.x(), -scrollport.y());
+    auto new_offset = current_offset;
+
+    if (content_rect.right() > current_offset.x() + scrollport.width())
+        new_offset.set_x(content_rect.right() - scrollport.width());
+    else if (content_rect.left() < current_offset.x())
+        new_offset.set_x(content_rect.left());
+
+    if (content_rect.bottom() > current_offset.y() + scrollport.height())
+        new_offset.set_y(content_rect.bottom() - scrollport.height());
+    else if (content_rect.top() < current_offset.y())
+        new_offset.set_y(content_rect.top());
+
+    set_scroll_offset(new_offset);
 }
 
 void PaintableBox::set_offset(CSSPixelPoint offset)
@@ -261,8 +296,26 @@ CSSPixelRect PaintableBox::absolute_border_box_rect() const
 // https://drafts.csswg.org/css-overflow-4/#overflow-clip-edge
 CSSPixelRect PaintableBox::overflow_clip_edge_rect() const
 {
-    // FIXME: Apply overflow-clip-margin-* properties
-    return absolute_padding_box_rect();
+    // https://drafts.csswg.org/css-overflow-4/#overflow-clip-margin
+    // Values are defined as follows:
+    // '<visual-box>'
+    //     Specifies the box edge to use as the overflow clip edge origin, i.e. when the specified offset is zero.
+    //     If omitted, defaults to 'padding-box' on non-replaced elements, or 'content-box' on replaced elements.
+    // FIXME: We can't parse this yet so it's always omitted for now.
+    auto overflow_clip_edge = absolute_padding_box_rect();
+    if (layout_node().is_replaced_box()) {
+        overflow_clip_edge = absolute_rect();
+    }
+
+    // '<length [0,∞]>'
+    //     The specified offset dictates how much the overflow clip edge is expanded from the specified box edge
+    //     Negative values are invalid. Defaults to zero if omitted.
+    overflow_clip_edge.inflate(
+        computed_values().overflow_clip_margin().top().length().absolute_length_to_px(),
+        computed_values().overflow_clip_margin().right().length().absolute_length_to_px(),
+        computed_values().overflow_clip_margin().bottom().length().absolute_length_to_px(),
+        computed_values().overflow_clip_margin().left().length().absolute_length_to_px());
+    return overflow_clip_edge;
 }
 
 template<typename Callable>
@@ -350,6 +403,22 @@ bool PaintableBox::could_be_scrolled_by_wheel_event() const
     return could_be_scrolled_by_wheel_event(ScrollDirection::Horizontal) || could_be_scrolled_by_wheel_event(ScrollDirection::Vertical);
 }
 
+bool PaintableBox::overflow_property_applies() const
+{
+    // https://drafts.csswg.org/css-overflow-3/#overflow-control
+    // Overflow properties apply to block containers, flex containers and grid containers.
+    // FIXME: Ideally we would check whether overflow applies positively rather than listing exceptions. However,
+    //        not all elements that should support overflow are currently identifiable that way.
+    auto const& display = computed_values().display();
+    if (layout_node().is_inline_node())
+        return false;
+    if (display.is_ruby_inside())
+        return false;
+    if (display.is_internal() && !display.is_table_cell() && !display.is_table_caption())
+        return false;
+    return true;
+}
+
 CSSPixels PaintableBox::available_scrollbar_length(ScrollDirection direction, ChromeMetrics const& metrics) const
 
 {
@@ -370,6 +439,9 @@ CSSPixels PaintableBox::available_scrollbar_length(ScrollDirection direction, Ch
 Optional<CSSPixelRect> PaintableBox::absolute_scrollbar_rect(ScrollDirection direction, bool with_gutter, ChromeMetrics const& metrics) const
 {
     if (!could_be_scrolled_by_wheel_event(direction))
+        return {};
+
+    if (computed_values().scrollbar_width() == CSS::ScrollbarWidth::None)
         return {};
 
     bool is_horizontal = direction == ScrollDirection::Horizontal;
@@ -402,7 +474,7 @@ Optional<CSSPixelRect> PaintableBox::absolute_scrollbar_rect(ScrollDirection dir
     return scrollbar_rect;
 }
 
-Optional<PaintableBox::ScrollbarData> PaintableBox::compute_scrollbar_data(ScrollDirection direction, ChromeMetrics const& metrics, AdjustThumbRectForScrollOffset adjust_thumb_rect_for_scroll_offset) const
+Optional<PaintableBox::ScrollbarData> PaintableBox::compute_scrollbar_data(ScrollDirection direction, ChromeMetrics const& metrics, ScrollStateSnapshot const* scroll_state_snapshot) const
 {
     bool is_horizontal = direction == ScrollDirection::Horizontal;
     auto orientation = is_horizontal ? Gfx::Orientation::Horizontal : Gfx::Orientation::Vertical;
@@ -448,8 +520,9 @@ Optional<PaintableBox::ScrollbarData> PaintableBox::compute_scrollbar_data(Scrol
     if (scrollable_overflow_length > scrollport_size)
         scrollbar_data.thumb_travel_to_scroll_ratio = (usable_scrollbar_length - thumb_length) / (scrollable_overflow_length - scrollport_size);
 
-    if (adjust_thumb_rect_for_scroll_offset == AdjustThumbRectForScrollOffset::Yes) {
-        CSSPixels scroll_offset = is_horizontal ? -own_scroll_frame_offset().x() : -own_scroll_frame_offset().y();
+    if (scroll_state_snapshot) {
+        auto own_offset = scroll_state_snapshot->own_offset_for_frame_with_id(own_scroll_frame_id().value());
+        CSSPixels scroll_offset = is_horizontal ? -own_offset.x() : -own_offset.y();
         CSSPixels thumb_offset = scroll_offset * scrollbar_data.thumb_travel_to_scroll_ratio;
 
         scrollbar_data.thumb_rect.translate_primary_offset_for_orientation(orientation, thumb_offset);
@@ -837,7 +910,8 @@ void PaintableBox::scroll_to_mouse_position(CSSPixelPoint position, ChromeMetric
 {
     VERIFY(m_scroll_thumb_dragging_direction.has_value());
 
-    auto scrollbar_data = compute_scrollbar_data(m_scroll_thumb_dragging_direction.value(), metrics, AdjustThumbRectForScrollOffset::Yes);
+    auto const& scroll_state = document().paintable()->scroll_state_snapshot();
+    auto scrollbar_data = compute_scrollbar_data(m_scroll_thumb_dragging_direction.value(), metrics, &scroll_state);
     VERIFY(scrollbar_data.has_value());
 
     auto orientation = m_scroll_thumb_dragging_direction == ScrollDirection::Horizontal ? Orientation::Horizontal : Orientation::Vertical;
@@ -864,13 +938,9 @@ void PaintableBox::scroll_to_mouse_position(CSSPixelPoint position, ChromeMetric
     auto scroll_position_in_pixels = CSSPixels::nearest_value_for(scroll_position * (scrollable_overflow_size - padding_size));
 
     // Set the new scroll offset.
-    auto new_scroll_offset = is_viewport_paintable() ? document().navigable()->viewport_scroll_offset() : scroll_offset();
+    auto new_scroll_offset = scroll_offset();
     new_scroll_offset.set_primary_offset_for_orientation(orientation, scroll_position_in_pixels);
-
-    if (is_viewport_paintable())
-        document().navigable()->perform_scroll_of_viewport_scrolling_box(new_scroll_offset);
-    else
-        (void)set_scroll_offset(new_scroll_offset);
+    set_scroll_offset(new_scroll_offset);
 }
 
 bool PaintableBox::handle_mousewheel(Badge<EventHandler>, CSSPixelPoint, unsigned, unsigned, int wheel_delta_x, int wheel_delta_y)
@@ -938,11 +1008,13 @@ bool PaintableBox::resizer_contains(CSSPixelPoint adjusted_position, ChromeMetri
 
 TraversalDecision PaintableBox::hit_test(CSSPixelPoint position, HitTestType type, Function<TraversalDecision(HitTestResult)> const& callback) const
 {
-    if (computed_values().visibility() != CSS::Visibility::Visible)
-        return TraversalDecision::Continue;
+    auto const is_visible = computed_values().visibility() == CSS::Visibility::Visible;
 
-    if (hit_test_chrome(position, callback) == TraversalDecision::Break)
-        return TraversalDecision::Break;
+    // Only hit test chrome (scrollbars, etc.) for visible elements.
+    if (is_visible) {
+        if (hit_test_chrome(position, callback) == TraversalDecision::Break)
+            return TraversalDecision::Break;
+    }
 
     if (is_viewport_paintable()) {
         auto& viewport_paintable = const_cast<ViewportPaintable&>(static_cast<ViewportPaintable const&>(*this));
@@ -958,7 +1030,8 @@ TraversalDecision PaintableBox::hit_test(CSSPixelPoint position, HitTestType typ
     if (hit_test_children(position, type, callback) == TraversalDecision::Break)
         return TraversalDecision::Break;
 
-    if (!visible_for_hit_testing())
+    // Hidden elements and elements with pointer-events: none shouldn't be hit.
+    if (!is_visible || !visible_for_hit_testing())
         return TraversalDecision::Continue;
 
     auto const& viewport_paintable = *document().paintable();
@@ -1038,11 +1111,6 @@ TraversalDecision PaintableBox::hit_test_children(CSSPixelPoint position, HitTes
 void PaintableBox::set_needs_display(InvalidateDisplayList should_invalidate_display_list)
 {
     document().set_needs_display(absolute_rect(), should_invalidate_display_list);
-}
-
-RefPtr<Gfx::ImmutableBitmap> PaintableBox::calculate_mask(DisplayListRecordingContext&, CSSPixelRect const&) const
-{
-    return {};
 }
 
 // https://www.w3.org/TR/css-transforms-1/#reference-box
@@ -1138,63 +1206,9 @@ void PaintableBox::resolve_paint_properties()
     auto const& box_shadow_data = computed_values.box_shadow();
     Vector<Painting::ShadowData> resolved_box_shadow_data;
     resolved_box_shadow_data.ensure_capacity(box_shadow_data.size());
-    for (auto const& layer : box_shadow_data) {
-        resolved_box_shadow_data.empend(
-            layer.color,
-            layer.offset_x.to_px(layout_node),
-            layer.offset_y.to_px(layout_node),
-            layer.blur_radius.to_px(layout_node),
-            layer.spread_distance.to_px(layout_node),
-            layer.placement == CSS::ShadowPlacement::Outer ? Painting::ShadowPlacement::Outer
-                                                           : Painting::ShadowPlacement::Inner);
-    }
+    for (auto const& layer : box_shadow_data)
+        resolved_box_shadow_data.unchecked_append(ShadowData::from_css(layer, layout_node));
     set_box_shadow_data(move(resolved_box_shadow_data));
-
-    auto const& transformations = computed_values.transformations();
-    auto const& translate = computed_values.translate();
-    auto const& rotate = computed_values.rotate();
-    auto const& scale = computed_values.scale();
-    auto matrix = Gfx::FloatMatrix4x4::identity();
-    if (translate)
-        matrix = matrix * translate->to_matrix(*this).release_value();
-    if (rotate)
-        matrix = matrix * rotate->to_matrix(*this).release_value();
-    if (scale)
-        matrix = matrix * scale->to_matrix(*this).release_value();
-    for (auto const& transform : transformations)
-        matrix = matrix * transform->to_matrix(*this).release_value();
-    set_transform(matrix);
-
-    auto const& transform_origin = computed_values.transform_origin();
-    auto reference_box = transform_reference_box();
-    auto x = reference_box.left() + transform_origin.x.to_px(layout_node, reference_box.width());
-    auto y = reference_box.top() + transform_origin.y.to_px(layout_node, reference_box.height());
-    set_transform_origin({ x, y });
-
-    // https://drafts.csswg.org/css-transforms-2/#perspective-matrix
-    if (auto perspective = computed_values.perspective(); perspective.has_value()) {
-        // The perspective matrix is computed as follows:
-
-        // 1. Start with the identity matrix.
-        // 2. Translate by the computed X and Y values of 'perspective-origin'
-        // https://drafts.csswg.org/css-transforms-2/#perspective-origin-property
-        // Percentages: refer to the size of the reference box
-        auto perspective_origin = computed_values.perspective_origin().resolved(layout_node, reference_box).to_type<float>();
-        auto computed_x = perspective_origin.x();
-        auto computed_y = perspective_origin.y();
-        m_perspective_matrix = Gfx::translation_matrix(Vector3<float>(computed_x, computed_y, 0));
-
-        // 3. Multiply by the matrix that would be obtained from the 'perspective()' transform function, where the
-        //    length is provided by the value of the perspective property
-        // NB: Length values less than 1px being clamped to 1px is handled by the perspective() function already.
-        // FIXME: Create the matrix directly.
-        m_perspective_matrix = m_perspective_matrix.value() * CSS::TransformationStyleValue::create(CSS::PropertyID::Transform, CSS::TransformFunction::Perspective, CSS::StyleValueVector { CSS::LengthStyleValue::create(CSS::Length::make_px(perspective.value())) })->to_matrix({}).release_value();
-
-        // 4. Translate by the negated computed X and Y values of 'perspective-origin'
-        m_perspective_matrix = m_perspective_matrix.value() * Gfx::translation_matrix(Vector3<float>(-computed_x, -computed_y, 0));
-    } else {
-        m_perspective_matrix = {};
-    }
 
     // Outlines
     auto outline_data = borders_data_for_outline(layout_node, computed_values.outline_color(), computed_values.outline_style(), computed_values.outline_width());
@@ -1334,21 +1348,13 @@ RefPtr<ScrollFrame const> PaintableBox::nearest_scroll_frame() const
     while (paintable) {
         if (paintable->own_scroll_frame())
             return paintable->own_scroll_frame();
-        if (paintable->is_fixed_position())
+        // Sticky elements need to find a scroll container even through fixed-position ancestors,
+        // because they must reference a scrollport for their sticky offset computation.
+        if (paintable->is_fixed_position() && !is_sticky_position())
             return nullptr;
         paintable = paintable->containing_block();
     }
     return nullptr;
-}
-
-CSSPixelRect PaintableBox::border_box_rect_relative_to_nearest_scrollable_ancestor() const
-{
-    auto result = absolute_border_box_rect();
-    auto const* nearest_scrollable_ancestor = this->nearest_scrollable_ancestor();
-    if (nearest_scrollable_ancestor) {
-        result.set_location(result.location() - nearest_scrollable_ancestor->absolute_rect().top_left());
-    }
-    return result;
 }
 
 PaintableBox const* PaintableBox::nearest_scrollable_ancestor() const

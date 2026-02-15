@@ -14,7 +14,9 @@
 #include <LibTextCodec/Decoder.h>
 #include <LibURL/URL.h>
 #include <LibWeb/Bindings/HTMLLinkElementPrototype.h>
+#include <LibWeb/CSS/CSSStyleSheet.h>
 #include <LibWeb/CSS/Parser/Parser.h>
+#include <LibWeb/CSS/StyleSheetList.h>
 #include <LibWeb/DOM/DOMTokenList.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Event.h>
@@ -26,6 +28,7 @@
 #include <LibWeb/Fetch/Infrastructure/HTTP/MIME.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Requests.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Responses.h>
+#include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/HTML/EventNames.h>
 #include <LibWeb/HTML/HTMLLinkElement.h>
 #include <LibWeb/HTML/PotentialCORSRequest.h>
@@ -128,6 +131,11 @@ String HTMLLinkElement::media() const
 GC::Ptr<CSS::CSSStyleSheet> HTMLLinkElement::sheet() const
 {
     return m_loaded_style_sheet;
+}
+
+void HTMLLinkElement::finished_loading_critical_style_subresources(AnyFailed)
+{
+    m_document_load_event_delayer.clear();
 }
 
 bool HTMLLinkElement::has_loaded_icon() const
@@ -831,10 +839,9 @@ void HTMLLinkElement::process_stylesheet_resource(bool success, Fetch::Infrastru
         //     1. If the element has a charset attribute, get an encoding from that attribute's value. If that succeeds, return the resulting encoding. [ENCODING]
         //     2. Otherwise, return the document's character encoding. [DOM]
         Optional<StringView> environment_encoding;
-        if (auto charset = attribute(HTML::AttributeNames::charset); charset.has_value()) {
-            if (auto environment_encoding = TextCodec::get_standardized_encoding(charset.release_value()); environment_encoding.has_value())
-                environment_encoding = environment_encoding.value();
-        }
+        if (auto charset = attribute(HTML::AttributeNames::charset); charset.has_value())
+            environment_encoding = TextCodec::get_standardized_encoding(charset.release_value());
+
         if (!environment_encoding.has_value() && document().encoding().has_value())
             environment_encoding = document().encoding().value();
 
@@ -877,7 +884,14 @@ void HTMLLinkElement::process_stylesheet_resource(bool success, Fetch::Infrastru
     // 7. Unblock rendering on el.
     unblock_rendering();
 
-    m_document_load_event_delayer.clear();
+    if (m_loaded_style_sheet) {
+        auto style_sheet_loading_state = m_loaded_style_sheet->loading_state();
+        if (style_sheet_loading_state == CSS::CSSStyleSheet::LoadingState::Loaded || style_sheet_loading_state == CSS::CSSStyleSheet::LoadingState::Error) {
+            finished_loading_critical_style_subresources(style_sheet_loading_state == CSS::CSSStyleSheet::LoadingState::Error ? AnyFailed::Yes : AnyFailed::No);
+        }
+    } else {
+        m_document_load_event_delayer.clear();
+    }
 }
 
 static NonnullRefPtr<Core::Promise<bool>> decode_favicon(ReadonlyBytes favicon_data, URL::URL const& favicon_url, GC::Ref<DOM::Document> document)
@@ -950,6 +964,13 @@ void HTMLLinkElement::load_fallback_favicon_if_needed(GC::Ref<DOM::Document> doc
     if (document->has_active_favicon())
         return;
     if (!document->url().scheme().is_one_of("http"sv, "https"sv))
+        return;
+
+    // AD-HOC: Don't load fallback favicon for auxiliary browsing contexts (popup windows).
+    // This matches the behavior observed in Chrome and Firefox, and avoids unnecessary network requests
+    // that can interfere with Content Security Policy violation reporting.
+    // See: https://github.com/whatwg/html/issues/12082
+    if (auto browsing_context = document->browsing_context(); browsing_context->is_auxiliary())
         return;
 
     // 1. Let request be a new request whose URL is the URL record obtained by resolving the URL "/favicon.ico" against

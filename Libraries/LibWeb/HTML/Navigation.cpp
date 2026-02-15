@@ -24,6 +24,7 @@
 #include <LibWeb/HTML/NavigationTransition.h>
 #include <LibWeb/HTML/Scripting/ExceptionReporter.h>
 #include <LibWeb/HTML/Scripting/TemporaryExecutionContext.h>
+#include <LibWeb/HTML/SessionHistoryEntry.h>
 #include <LibWeb/HTML/StructuredSerialize.h>
 #include <LibWeb/HTML/TraversableNavigable.h>
 #include <LibWeb/HTML/Window.h>
@@ -182,9 +183,9 @@ bool Navigation::can_go_forward() const
     // 2. Assert: navigation's current entry index is not −1.
     VERIFY(m_current_entry_index != -1);
 
-    // 3. If this's current entry index is equal to this's entry list's size, then return false.
+    // 3. If this's current entry index is equal to this's entry list's size − 1, then return false.
     // 4. Return true.
-    return (m_current_entry_index != static_cast<i64>(m_entry_list.size()));
+    return (m_current_entry_index != static_cast<i64>(m_entry_list.size() - 1));
 }
 
 // https://html.spec.whatwg.org/multipage/browsing-the-web.html#history-handling-behavior
@@ -344,8 +345,7 @@ WebIDL::ExceptionOr<NavigationResult> Navigation::reload(NavigationReloadOptions
     auto api_method_tracker = maybe_set_the_upcoming_non_traverse_api_method_tracker(info, serialized_state);
 
     // 9. Reload document's node navigable with navigationAPIState set to serializedState.
-    // FIXME: Pass serialized_state to reload
-    document.navigable()->reload();
+    document.navigable()->reload(move(serialized_state));
 
     return navigation_api_method_tracker_derived_result(api_method_tracker);
 }
@@ -787,9 +787,10 @@ void Navigation::abort_a_navigate_event(GC::Ref<NavigateEvent> event, GC::Ref<We
     // 4. Set navigation's ongoing navigate event to null.
     m_ongoing_navigate_event = nullptr;
 
-    // 5. If navigation's ongoing API method tracker is non-null, then reject the finished promise for apiMethodTracker with reason.
+    // 5. If navigation's ongoing API method tracker is non-null, then reject the finished promise for apiMethodTracker
+    //    with reason.
     if (m_ongoing_api_method_tracker)
-        WebIDL::reject_promise(realm(), m_ongoing_api_method_tracker->finished_promise, reason);
+        reject_the_finished_promise(*m_ongoing_api_method_tracker, reason);
 
     // 6. Fire an event named navigateerror at navigation using ErrorEvent, with additional attributes initialized
     //    according to errorInfo.

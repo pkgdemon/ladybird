@@ -72,6 +72,10 @@ void HTMLDetailsElement::attribute_changed(FlyString const& local_name, Optional
 
     // 3. If localName is open, then:
     else if (local_name == HTML::AttributeNames::open) {
+        // The :open pseudo-class can affect sibling selectors (e.g., details:open + sibling),
+        // so we need full subtree + sibling invalidation, not just targeted invalidation.
+        invalidate_style(DOM::StyleInvalidationReason::HTMLDetailsOrDialogOpenAttributeChange);
+
         // 1. If one of oldValue or value is null and the other is not null, run the following steps, which are known as
         //    the details notification task steps, for this details element:
         if (old_value.has_value() != value.has_value()) {
@@ -230,6 +234,7 @@ WebIDL::ExceptionOr<void> HTMLDetailsElement::create_shadow_tree_if_needed()
 
     // The details element is expected to have an internal shadow tree with three child elements:
     auto shadow_root = realm.create<DOM::ShadowRoot>(document(), *this, Bindings::ShadowRootMode::Closed);
+    shadow_root->set_user_agent_internal(true);
     shadow_root->set_slot_assignment(Bindings::SlotAssignmentMode::Manual);
 
     // The first child element is a slot that is expected to take the details element's first summary element child, if any.

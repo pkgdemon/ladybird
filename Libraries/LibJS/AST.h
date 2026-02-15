@@ -16,8 +16,6 @@
 #include <AK/Utf16String.h>
 #include <AK/Variant.h>
 #include <AK/Vector.h>
-#include <LibGC/Root.h>
-#include <LibJS/Bytecode/CodeGenerationError.h>
 #include <LibJS/Bytecode/Executable.h>
 #include <LibJS/Bytecode/IdentifierTable.h>
 #include <LibJS/Bytecode/Op.h>
@@ -25,8 +23,8 @@
 #include <LibJS/Bytecode/ScopedOperand.h>
 #include <LibJS/Export.h>
 #include <LibJS/Forward.h>
+#include <LibJS/FunctionParsingInsights.h>
 #include <LibJS/LocalVariable.h>
-#include <LibJS/Runtime/ClassFieldDefinition.h>
 #include <LibJS/Runtime/Completion.h>
 #include <LibJS/Runtime/EnvironmentCoordinate.h>
 #include <LibJS/Runtime/FunctionKind.h>
@@ -45,14 +43,19 @@ class FunctionDeclaration;
 class Identifier;
 class MemberExpression;
 class VariableDeclaration;
-class SharedFunctionInstanceData;
-
 template<class T, class... Args>
 static inline NonnullRefPtr<T>
 create_ast_node(SourceRange range, Args&&... args)
 {
     return adopt_ref(*new T(move(range), forward<Args>(args)...));
 }
+
+struct ASTDumpState {
+    ByteString prefix;
+    bool is_last { true };
+    bool is_root { true };
+    bool use_color { false };
+};
 
 class JS_API ASTNode : public RefCounted<ASTNode> {
 public:
@@ -61,8 +64,8 @@ public:
     // NOTE: This is here to stop ASAN complaining about mismatch between new/delete sizes in ASTNodeWithTailArray.
     void operator delete(void* ptr) { ::operator delete(ptr); }
 
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const;
-    virtual void dump(int indent) const;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const;
+    virtual void dump(ASTDumpState const& state = {}) const;
 
     [[nodiscard]] SourceRange const& source_range() const { return m_source_range; }
     u32 start_offset() const { return m_source_range.start.offset; }
@@ -180,9 +183,9 @@ public:
     {
     }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
-    Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_labelled_evaluation(Bytecode::Generator&, Vector<FlyString> const&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    Optional<Bytecode::ScopedOperand> generate_labelled_evaluation(Bytecode::Generator&, Vector<FlyString> const&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const;
 
     FlyString const& label() const { return m_label; }
     FlyString& label() { return m_label; }
@@ -210,7 +213,7 @@ class IterationStatement : public Statement {
 public:
     using Statement::Statement;
 
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_labelled_evaluation(Bytecode::Generator&, Vector<FlyString> const&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const = 0;
+    virtual Optional<Bytecode::ScopedOperand> generate_labelled_evaluation(Bytecode::Generator&, Vector<FlyString> const&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const = 0;
 
 private:
     virtual bool is_iteration_statement() const final { return true; }
@@ -222,7 +225,7 @@ public:
         : Statement(move(source_range))
     {
     }
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 };
 
 class ErrorStatement final : public Statement {
@@ -241,8 +244,8 @@ public:
     {
     }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
     Expression const& expression() const { return m_expression; }
 
@@ -281,6 +284,23 @@ public:
     }
 };
 
+struct VarToInitialize {
+    Identifier const& identifier;
+    bool is_parameter { false };
+    bool is_function_name { false };
+};
+
+struct FunctionScopeData {
+    Vector<NonnullRefPtr<FunctionDeclaration const>> functions_to_initialize;
+    Vector<VarToInitialize> vars_to_initialize;
+    HashTable<Utf16FlyString> var_names;
+    bool has_function_named_arguments { false };
+    bool has_argument_parameter { false };
+    bool has_lexically_declared_arguments { false };
+    size_t non_local_var_count { 0 };
+    size_t non_local_var_count_for_parameter_expressions { 0 };
+};
+
 class JS_API ScopeNode : public Statement {
 public:
     template<typename T, typename... Args>
@@ -304,8 +324,8 @@ public:
     }
 
     Vector<NonnullRefPtr<Statement const>> const& children() const { return m_children; }
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
     void add_var_scoped_declaration(NonnullRefPtr<Declaration const> variables);
     void add_lexical_declaration(NonnullRefPtr<Declaration const> variables);
@@ -314,6 +334,7 @@ public:
     [[nodiscard]] bool has_lexical_declarations() const { return !m_lexical_declarations.is_empty(); }
     [[nodiscard]] bool has_non_local_lexical_declarations() const;
     [[nodiscard]] bool has_var_declarations() const { return !m_var_declarations.is_empty(); }
+    [[nodiscard]] Vector<NonnullRefPtr<Declaration const>> const& var_declarations() const { return m_var_declarations; }
 
     [[nodiscard]] size_t var_declaration_count() const { return m_var_declarations.size(); }
     [[nodiscard]] size_t lexical_declaration_count() const { return m_lexical_declarations.size(); }
@@ -336,6 +357,10 @@ public:
         return index;
     }
 
+    FunctionScopeData const* function_scope_data() const { return m_function_scope_data.ptr(); }
+    void set_function_scope_data(OwnPtr<FunctionScopeData> data) { m_function_scope_data = move(data); }
+    void ensure_function_scope_data() const;
+
 protected:
     explicit ScopeNode(SourceRange source_range)
         : Statement(move(source_range))
@@ -352,12 +377,14 @@ private:
     Vector<NonnullRefPtr<FunctionDeclaration const>> m_functions_hoistable_with_annexB_extension;
 
     Vector<LocalVariable> m_local_variables_names;
+    mutable OwnPtr<FunctionScopeData> m_function_scope_data;
 };
 
 // ImportEntry Record, https://tc39.es/ecma262/#table-importentry-record-fields
 struct ImportEntry {
-    Optional<Utf16FlyString> import_name; // [[ImportName]]: stored string if Optional is not empty, NAMESPACE-OBJECT otherwise
-    Utf16FlyString local_name;            // [[LocalName]]
+    Optional<Utf16FlyString> import_name;     // [[ImportName]]: stored string if Optional is not empty, NAMESPACE-OBJECT otherwise
+    Utf16FlyString local_name;                // [[LocalName]]
+    Optional<ModuleRequest> m_module_request; // [[ModuleRequest]]
 
     ImportEntry(Optional<Utf16FlyString> import_name_, Utf16FlyString local_name_)
         : import_name(move(import_name_))
@@ -369,13 +396,8 @@ struct ImportEntry {
 
     ModuleRequest const& module_request() const
     {
-        VERIFY(m_module_request);
-        return *m_module_request;
+        return m_module_request.value();
     }
-
-private:
-    friend class ImportStatement;
-    ModuleRequest* m_module_request = nullptr; // [[ModuleRequest]]
 };
 
 class ImportStatement final : public Statement {
@@ -386,12 +408,12 @@ public:
         , m_entries(move(entries))
     {
         for (auto& entry : m_entries)
-            entry.m_module_request = &m_module_request;
+            entry.m_module_request = m_module_request;
     }
 
-    virtual void dump(int indent) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
 
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
     bool has_bound_name(Utf16FlyString const& name) const;
     Vector<ImportEntry> const& entries() const { return m_entries; }
@@ -425,29 +447,24 @@ struct ExportEntry {
     {
     }
 
+    Optional<ModuleRequest> m_module_request; // [[ModuleRequest]]
+
     bool is_module_request() const
     {
-        return m_module_request != nullptr;
+        return m_module_request.has_value();
     }
 
-    static ExportEntry indirect_export_entry(ModuleRequest const& module_request, Optional<Utf16FlyString> export_name, Optional<Utf16FlyString> import_name)
+    static ExportEntry indirect_export_entry(ModuleRequest module_request, Optional<Utf16FlyString> export_name, Optional<Utf16FlyString> import_name)
     {
         ExportEntry entry { Kind::NamedExport, move(export_name), move(import_name) };
-        entry.m_module_request = &module_request;
+        entry.m_module_request = move(module_request);
         return entry;
     }
 
     ModuleRequest const& module_request() const
     {
-        VERIFY(m_module_request);
-        return *m_module_request;
+        return m_module_request.value();
     }
-
-private:
-    ModuleRequest const* m_module_request { nullptr }; // [[ModuleRequest]]
-    friend class ExportStatement;
-
-public:
     static ExportEntry named_export(Utf16FlyString export_name, Utf16FlyString local_name)
     {
         return ExportEntry { Kind::NamedExport, move(export_name), move(local_name) };
@@ -482,13 +499,13 @@ public:
     {
         if (m_module_request.has_value()) {
             for (auto& entry : m_entries)
-                entry.m_module_request = &m_module_request.value();
+                entry.m_module_request = m_module_request.value();
         }
     }
 
-    virtual void dump(int indent) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
 
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
     bool has_export(Utf16FlyString const& export_name) const;
 
@@ -553,8 +570,6 @@ public:
 
     bool has_top_level_await() const { return m_has_top_level_await; }
     void set_has_top_level_await() { m_has_top_level_await = true; }
-
-    ThrowCompletionOr<void> global_declaration_instantiation(VM&, GlobalEnvironment&) const;
 
 private:
     virtual bool is_program() const override { return true; }
@@ -648,13 +663,13 @@ struct BindingPattern : RefCounted<BindingPattern> {
         Object,
     };
 
-    void dump(int indent) const;
+    void dump(ASTDumpState const& state = {}) const;
 
     ThrowCompletionOr<void> for_each_bound_identifier(ThrowCompletionOrVoidCallback<Identifier const&>&& callback) const;
 
     bool contains_expression() const;
 
-    Bytecode::CodeGenerationErrorOr<void> generate_bytecode(Bytecode::Generator&, Bytecode::Op::BindingInitializationMode initialization_mode, Bytecode::ScopedOperand const& object) const;
+    void generate_bytecode(Bytecode::Generator&, Bytecode::Op::BindingInitializationMode initialization_mode, Bytecode::ScopedOperand const& object) const;
 
     Vector<BindingEntry> entries;
     Kind kind { Kind::Object };
@@ -714,8 +729,8 @@ public:
     bool is_inside_scope_with_eval() const { return m_is_inside_scope_with_eval; }
     void set_is_inside_scope_with_eval() { m_is_inside_scope_with_eval = true; }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
 private:
     virtual bool is_identifier() const override { return true; }
@@ -765,6 +780,17 @@ public:
         return {};
     }
 
+    bool has_rest_parameter_with_name(Utf16FlyString const& name) const
+    {
+        for (auto const& parameter : m_parameters) {
+            if (parameter.is_rest && parameter.binding.has<NonnullRefPtr<Identifier const>>()) {
+                if (parameter.binding.get<NonnullRefPtr<Identifier const>>()->string() == name)
+                    return true;
+            }
+        }
+        return false;
+    }
+
 private:
     FunctionParameters(Vector<FunctionParameter> parameters)
         : m_parameters(move(parameters))
@@ -774,12 +800,8 @@ private:
     Vector<FunctionParameter> m_parameters;
 };
 
-struct FunctionParsingInsights {
-    bool uses_this { false };
-    bool uses_this_from_environment { false };
-    bool contains_direct_call_to_eval { false };
-    bool might_need_arguments_object { false };
-};
+// NB: FunctionParsingInsights is defined in FunctionParsingInsights.h
+//     and re-exported here for convenience.
 
 class JS_API FunctionNode {
 public:
@@ -790,7 +812,7 @@ public:
     auto const& body_ptr() const { return m_body; }
     auto const& parameters() const { return m_parameters; }
     i32 function_length() const { return m_function_length; }
-    Vector<LocalVariable> const& local_variables_names() const { return m_local_variables_names; }
+    Vector<LocalVariable> const& local_variables_names() const { return static_cast<ScopeNode const&>(*m_body).local_variables_names(); }
     bool is_strict_mode() const { return m_is_strict_mode; }
     bool might_need_arguments_object() const { return m_parsing_insights.might_need_arguments_object; }
     bool contains_direct_call_to_eval() const { return m_parsing_insights.contains_direct_call_to_eval; }
@@ -801,14 +823,11 @@ public:
 
     virtual bool has_name() const = 0;
 
-    GC::Ptr<SharedFunctionInstanceData> shared_data() const;
-    void set_shared_data(GC::Ptr<SharedFunctionInstanceData>) const;
-
     virtual ~FunctionNode();
 
 protected:
-    FunctionNode(RefPtr<Identifier const> name, Utf16View source_text, NonnullRefPtr<Statement const> body, NonnullRefPtr<FunctionParameters const> parameters, i32 function_length, FunctionKind kind, bool is_strict_mode, FunctionParsingInsights parsing_insights, bool is_arrow_function, Vector<LocalVariable> local_variables_names);
-    void dump(int indent, ByteString const& class_name) const;
+    FunctionNode(RefPtr<Identifier const> name, Utf16View source_text, NonnullRefPtr<Statement const> body, NonnullRefPtr<FunctionParameters const> parameters, i32 function_length, FunctionKind kind, bool is_strict_mode, FunctionParsingInsights parsing_insights, bool is_arrow_function);
+    void dump(ASTDumpState const& state, ByteString const& class_name, SourceRange const& range) const;
 
     RefPtr<Identifier const> m_name { nullptr };
 
@@ -821,10 +840,6 @@ private:
     bool m_is_strict_mode : 1 { false };
     bool m_is_arrow_function : 1 { false };
     FunctionParsingInsights m_parsing_insights;
-
-    Vector<LocalVariable> m_local_variables_names;
-
-    mutable GC::Root<SharedFunctionInstanceData> m_shared_data;
 };
 
 class FunctionDeclaration final
@@ -833,14 +848,14 @@ class FunctionDeclaration final
 public:
     static bool must_have_name() { return true; }
 
-    FunctionDeclaration(SourceRange source_range, RefPtr<Identifier const> name, Utf16View source_text, NonnullRefPtr<Statement const> body, NonnullRefPtr<FunctionParameters const> parameters, i32 function_length, FunctionKind kind, bool is_strict_mode, FunctionParsingInsights insights, Vector<LocalVariable> local_variables_names)
+    FunctionDeclaration(SourceRange source_range, RefPtr<Identifier const> name, Utf16View source_text, NonnullRefPtr<Statement const> body, NonnullRefPtr<FunctionParameters const> parameters, i32 function_length, FunctionKind kind, bool is_strict_mode, FunctionParsingInsights insights)
         : Declaration(move(source_range))
-        , FunctionNode(move(name), source_text, move(body), move(parameters), function_length, kind, is_strict_mode, insights, false, move(local_variables_names))
+        , FunctionNode(move(name), source_text, move(body), move(parameters), function_length, kind, is_strict_mode, insights, false)
     {
     }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
     ThrowCompletionOr<void> for_each_bound_identifier(ThrowCompletionOrVoidCallback<Identifier const&>&&) const override;
 
@@ -862,16 +877,16 @@ class FunctionExpression final
 public:
     static bool must_have_name() { return false; }
 
-    FunctionExpression(SourceRange source_range, RefPtr<Identifier const> name, Utf16View source_text, NonnullRefPtr<Statement const> body, NonnullRefPtr<FunctionParameters const> parameters, i32 function_length, FunctionKind kind, bool is_strict_mode, FunctionParsingInsights insights, Vector<LocalVariable> local_variables_names, bool is_arrow_function = false)
+    FunctionExpression(SourceRange source_range, RefPtr<Identifier const> name, Utf16View source_text, NonnullRefPtr<Statement const> body, NonnullRefPtr<FunctionParameters const> parameters, i32 function_length, FunctionKind kind, bool is_strict_mode, FunctionParsingInsights insights, bool is_arrow_function = false)
         : Expression(move(source_range))
-        , FunctionNode(move(name), source_text, move(body), move(parameters), function_length, kind, is_strict_mode, insights, is_arrow_function, move(local_variables_names))
+        , FunctionNode(move(name), source_text, move(body), move(parameters), function_length, kind, is_strict_mode, insights, is_arrow_function)
     {
     }
 
-    virtual void dump(int indent) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
 
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
-    Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode_with_lhs_name(Bytecode::Generator&, Optional<Bytecode::IdentifierTableIndex> lhs_name, Optional<Bytecode::ScopedOperand> preferred_dst = {}, bool is_method = false) const;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    Optional<Bytecode::ScopedOperand> generate_bytecode_with_lhs_name(Bytecode::Generator&, Optional<Bytecode::IdentifierTableIndex> lhs_name, Optional<Bytecode::ScopedOperand> preferred_dst = {}, bool is_method = false) const;
 
     bool has_name() const override { return !name().is_empty(); }
 
@@ -901,8 +916,8 @@ public:
     Expression const* argument() const { return m_argument; }
     bool is_yield_from() const { return m_is_yield_from; }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
 private:
     RefPtr<Expression const> m_argument;
@@ -917,8 +932,8 @@ public:
     {
     }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
 private:
     NonnullRefPtr<Expression const> m_argument;
@@ -934,8 +949,8 @@ public:
 
     Expression const* argument() const { return m_argument; }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
 private:
     RefPtr<Expression const> m_argument;
@@ -955,8 +970,8 @@ public:
     Statement const& consequent() const { return *m_consequent; }
     Statement const* alternate() const { return m_alternate; }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
 private:
     NonnullRefPtr<Expression const> m_predicate;
@@ -976,9 +991,9 @@ public:
     Expression const& test() const { return *m_test; }
     Statement const& body() const { return *m_body; }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_labelled_evaluation(Bytecode::Generator&, Vector<FlyString> const&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_labelled_evaluation(Bytecode::Generator&, Vector<FlyString> const&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
 private:
     NonnullRefPtr<Expression const> m_test;
@@ -997,9 +1012,9 @@ public:
     Expression const& test() const { return *m_test; }
     Statement const& body() const { return *m_body; }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_labelled_evaluation(Bytecode::Generator&, Vector<FlyString> const&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_labelled_evaluation(Bytecode::Generator&, Vector<FlyString> const&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
 private:
     NonnullRefPtr<Expression const> m_test;
@@ -1018,8 +1033,8 @@ public:
     Expression const& object() const { return *m_object; }
     Statement const& body() const { return *m_body; }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
 private:
     NonnullRefPtr<Expression const> m_object;
@@ -1042,9 +1057,9 @@ public:
     Expression const* update() const { return m_update; }
     Statement const& body() const { return *m_body; }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_labelled_evaluation(Bytecode::Generator&, Vector<FlyString> const&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_labelled_evaluation(Bytecode::Generator&, Vector<FlyString> const&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
 private:
     RefPtr<ASTNode const> m_init;
@@ -1067,9 +1082,9 @@ public:
     Expression const& rhs() const { return *m_rhs; }
     Statement const& body() const { return *m_body; }
 
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_labelled_evaluation(Bytecode::Generator&, Vector<FlyString> const&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
-    virtual void dump(int indent) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_labelled_evaluation(Bytecode::Generator&, Vector<FlyString> const&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
 
 private:
     Variant<NonnullRefPtr<ASTNode const>, NonnullRefPtr<BindingPattern const>> m_lhs;
@@ -1091,9 +1106,9 @@ public:
     Expression const& rhs() const { return *m_rhs; }
     Statement const& body() const { return *m_body; }
 
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_labelled_evaluation(Bytecode::Generator&, Vector<FlyString> const&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
-    virtual void dump(int indent) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_labelled_evaluation(Bytecode::Generator&, Vector<FlyString> const&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
 
 private:
     Variant<NonnullRefPtr<ASTNode const>, NonnullRefPtr<BindingPattern const>> m_lhs;
@@ -1111,9 +1126,9 @@ public:
     {
     }
 
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_labelled_evaluation(Bytecode::Generator&, Vector<FlyString> const&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
-    virtual void dump(int indent) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_labelled_evaluation(Bytecode::Generator&, Vector<FlyString> const&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
 
 private:
     Variant<NonnullRefPtr<ASTNode const>, NonnullRefPtr<BindingPattern const>> m_lhs;
@@ -1156,8 +1171,8 @@ public:
     {
     }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
 private:
     BinaryOp m_op;
@@ -1185,8 +1200,8 @@ public:
     NonnullRefPtr<Expression const> lhs() const { return m_lhs; }
     NonnullRefPtr<Expression const> rhs() const { return m_rhs; }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
 private:
     LogicalOp m_op;
@@ -1216,8 +1231,8 @@ public:
     auto const& lhs() const { return m_lhs; }
     auto const& op() const { return m_op; }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
 private:
     UnaryOp m_op;
@@ -1233,8 +1248,8 @@ public:
         VERIFY(m_expressions.size() >= 2);
     }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
 private:
     Vector<NonnullRefPtr<Expression const>> m_expressions;
@@ -1262,8 +1277,8 @@ public:
     {
     }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
     virtual Value value() const override { return Value(m_value); }
 
@@ -1281,8 +1296,8 @@ public:
     {
     }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
     virtual Value value() const override { return m_value; }
 
@@ -1300,8 +1315,10 @@ public:
     {
     }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    ByteString const& raw_value() const { return m_value; }
+
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
 private:
     ByteString m_value;
@@ -1315,8 +1332,8 @@ public:
     {
     }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
     Utf16String const& value() const { return m_value; }
 
@@ -1333,8 +1350,8 @@ public:
     {
     }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
     virtual Value value() const override { return js_null(); }
 
@@ -1354,8 +1371,8 @@ public:
     {
     }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
     regex::Parser::Result const& parsed_regex() const { return m_parsed_regex; }
     String const& parsed_pattern() const { return m_parsed_pattern; }
@@ -1381,7 +1398,7 @@ public:
 
     Utf16FlyString const& string() const { return m_string; }
 
-    virtual void dump(int indent) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
 
     virtual bool is_private_identifier() const override { return true; }
 
@@ -1406,10 +1423,6 @@ public:
     virtual ElementKind class_element_kind() const = 0;
     bool is_static() const { return m_is_static; }
 
-    // We use the Completion also as a ClassStaticBlockDefinition Record.
-    using ClassValue = Variant<ClassFieldDefinition, Completion, PrivateElement>;
-    virtual ThrowCompletionOr<ClassValue> class_element_evaluation(VM&, Object& home_object, Value) const = 0;
-
     virtual Optional<Utf16FlyString> private_bound_identifier() const { return {}; }
 
 private:
@@ -1433,11 +1446,11 @@ public:
     }
 
     Expression const& key() const { return *m_key; }
+    FunctionExpression const& function() const { return *m_function; }
     Kind kind() const { return m_kind; }
     virtual ElementKind class_element_kind() const override { return ElementKind::Method; }
 
-    virtual void dump(int indent) const override;
-    virtual ThrowCompletionOr<ClassValue> class_element_evaluation(VM&, Object& home_object, Value property_key) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
     virtual Optional<Utf16FlyString> private_bound_identifier() const override;
 
 private:
@@ -1462,8 +1475,7 @@ public:
 
     virtual ElementKind class_element_kind() const override { return ElementKind::Field; }
 
-    virtual void dump(int indent) const override;
-    virtual ThrowCompletionOr<ClassValue> class_element_evaluation(VM&, Object& home_object, Value property_key) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
     virtual Optional<Utf16FlyString> private_bound_identifier() const override;
 
 private:
@@ -1480,9 +1492,10 @@ public:
     }
 
     virtual ElementKind class_element_kind() const override { return ElementKind::StaticInitializer; }
-    virtual ThrowCompletionOr<ClassValue> class_element_evaluation(VM&, Object& home_object, Value property_key) const override;
 
-    virtual void dump(int indent) const override;
+    FunctionBody const& function_body() const { return *m_function_body; }
+
+    virtual void dump(ASTDumpState const& state = {}) const override;
 
 private:
     NonnullRefPtr<FunctionBody> m_function_body;
@@ -1495,8 +1508,8 @@ public:
     {
     }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
     virtual bool is_super_expression() const override { return true; }
 };
@@ -1518,13 +1531,11 @@ public:
     Utf16View source_text() const { return m_source_text; }
     RefPtr<FunctionExpression const> constructor() const { return m_constructor; }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
-    Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode_with_lhs_name(Bytecode::Generator&, Optional<Bytecode::IdentifierTableIndex> lhs_name, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    Optional<Bytecode::ScopedOperand> generate_bytecode_with_lhs_name(Bytecode::Generator&, Optional<Bytecode::IdentifierTableIndex> lhs_name, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const;
 
     bool has_name() const { return m_name; }
-
-    ThrowCompletionOr<ECMAScriptFunctionObject*> create_class_constructor(VM&, Environment* class_environment, Environment* environment, Value super_class, ReadonlySpan<Value> element_keys, Optional<Utf16FlyString> const& binding_name = {}, Utf16FlyString const& class_name = {}) const;
 
 private:
     virtual bool is_class_expression() const override { return true; }
@@ -1546,8 +1557,8 @@ public:
     {
     }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
     ThrowCompletionOr<void> for_each_bound_identifier(ThrowCompletionOrVoidCallback<Identifier const&>&&) const override;
 
@@ -1574,8 +1585,8 @@ public:
     {
     }
 
-    virtual void dump(int) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const&) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
 private:
     NonnullRefPtr<Expression const> m_expression;
@@ -1590,8 +1601,8 @@ public:
     {
     }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
 private:
     virtual bool is_spread_expression() const override { return true; }
@@ -1605,8 +1616,8 @@ public:
         : Expression(move(source_range))
     {
     }
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 };
 
 struct CallExpressionArgument {
@@ -1635,8 +1646,8 @@ public:
 
     static NonnullRefPtr<CallExpression> create(SourceRange, NonnullRefPtr<Expression const> callee, ReadonlySpan<Argument> arguments, InvocationStyleEnum invocation_style, InsideParenthesesEnum inside_parens);
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
     Expression const& callee() const { return m_callee; }
 
@@ -1703,8 +1714,8 @@ public:
         VERIFY(is_part_of_synthetic_constructor == IsPartOfSyntheticConstructor::Yes);
     }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
 private:
     Vector<CallExpression::Argument> const m_arguments;
@@ -1748,8 +1759,8 @@ public:
     {
     }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
 private:
     AssignmentOp m_op;
@@ -1772,8 +1783,8 @@ public:
     {
     }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
 private:
     virtual bool is_update_expression() const override { return true; }
@@ -1808,7 +1819,7 @@ public:
     auto& target() const { return m_target; }
     Expression const* init() const { return m_init; }
 
-    virtual void dump(int indent) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
 
 private:
     Variant<NonnullRefPtr<Identifier const>, NonnullRefPtr<BindingPattern const>> m_target;
@@ -1826,8 +1837,8 @@ public:
 
     DeclarationKind declaration_kind() const { return m_declaration_kind; }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
     Vector<NonnullRefPtr<VariableDeclarator const>> const& declarations() const { return m_declarations; }
 
@@ -1852,7 +1863,7 @@ public:
     {
     }
 
-    virtual void dump(int indent) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
 
     ThrowCompletionOr<void> for_each_bound_identifier(ThrowCompletionOrVoidCallback<Identifier const&>&&) const override;
 
@@ -1895,7 +1906,7 @@ public:
     Type type() const { return m_property_type; }
     bool is_method() const { return m_is_method; }
 
-    virtual void dump(int indent) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
 
 private:
     Type m_property_type;
@@ -1912,8 +1923,8 @@ public:
     {
     }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
 private:
     virtual bool is_object_expression() const override { return true; }
@@ -1931,8 +1942,8 @@ public:
 
     Vector<RefPtr<Expression const>> const& elements() const { return m_elements; }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
 private:
     virtual bool is_array_expression() const override { return true; }
@@ -1955,8 +1966,8 @@ public:
     {
     }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
     Vector<NonnullRefPtr<Expression const>> const& expressions() const { return m_expressions; }
     Vector<NonnullRefPtr<StringLiteral const>> const& raw_strings() const { return m_raw_strings; }
@@ -1975,8 +1986,8 @@ public:
     {
     }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
 private:
     NonnullRefPtr<Expression const> const m_tag;
@@ -1993,8 +2004,8 @@ public:
     {
     }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
     bool is_computed() const { return m_computed; }
     Expression const& object() const { return *m_object; }
@@ -2045,8 +2056,8 @@ public:
     {
     }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
     Expression const& base() const { return *m_base; }
     Vector<Reference> const& references() const { return m_references; }
@@ -2071,8 +2082,8 @@ public:
     {
     }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
 private:
     Type m_type;
@@ -2087,8 +2098,8 @@ public:
     {
     }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
 private:
     virtual bool is_import_call() const override { return true; }
@@ -2107,8 +2118,8 @@ public:
     {
     }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
 private:
     NonnullRefPtr<Expression const> m_test;
@@ -2142,7 +2153,7 @@ public:
     auto& parameter() const { return m_parameter; }
     BlockStatement const& body() const { return m_body; }
 
-    virtual void dump(int indent) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
 
 private:
     Variant<NonnullRefPtr<Identifier const>, NonnullRefPtr<BindingPattern const>, Empty> m_parameter;
@@ -2163,8 +2174,8 @@ public:
     CatchClause const* handler() const { return m_handler; }
     BlockStatement const* finalizer() const { return m_finalizer; }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
 private:
     NonnullRefPtr<BlockStatement const> m_block;
@@ -2182,8 +2193,8 @@ public:
 
     Expression const& argument() const { return m_argument; }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
 private:
     NonnullRefPtr<Expression const> m_argument;
@@ -2199,7 +2210,7 @@ public:
 
     Expression const* test() const { return m_test; }
 
-    virtual void dump(int indent) const override;
+    virtual void dump(ASTDumpState const& state = {}) const override;
 
 private:
     RefPtr<Expression const> m_test;
@@ -2213,9 +2224,9 @@ public:
     {
     }
 
-    virtual void dump(int indent) const override;
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
-    Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_labelled_evaluation(Bytecode::Generator&, Vector<FlyString> const&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const;
+    virtual void dump(ASTDumpState const& state = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    Optional<Bytecode::ScopedOperand> generate_labelled_evaluation(Bytecode::Generator&, Vector<FlyString> const&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const;
 
     void add_case(NonnullRefPtr<SwitchCase const> switch_case) { m_cases.append(move(switch_case)); }
 
@@ -2233,7 +2244,7 @@ public:
     }
 
     Optional<FlyString> const& target_label() const { return m_target_label; }
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
 private:
     Optional<FlyString> m_target_label;
@@ -2247,7 +2258,7 @@ public:
     {
     }
 
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 
     Optional<FlyString> const& target_label() const { return m_target_label; }
 
@@ -2262,7 +2273,7 @@ public:
     {
     }
 
-    virtual Bytecode::CodeGenerationErrorOr<Optional<Bytecode::ScopedOperand>> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
+    virtual Optional<Bytecode::ScopedOperand> generate_bytecode(Bytecode::Generator&, Optional<Bytecode::ScopedOperand> preferred_dst = {}) const override;
 };
 
 class SyntheticReferenceExpression final : public Expression {

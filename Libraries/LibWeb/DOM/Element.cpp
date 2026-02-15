@@ -10,6 +10,7 @@
 #include <AK/Checked.h>
 #include <AK/Debug.h>
 #include <AK/IterationDecision.h>
+#include <AK/JsonObjectSerializer.h>
 #include <AK/NumericLimits.h>
 #include <AK/StringBuilder.h>
 #include <LibGfx/Bitmap.h>
@@ -18,10 +19,10 @@
 #include <LibURL/Parser.h>
 #include <LibUnicode/CharacterTypes.h>
 #include <LibUnicode/Locale.h>
-#include <LibWeb/Animations/Animation.h>
 #include <LibWeb/Bindings/ElementPrototype.h>
 #include <LibWeb/Bindings/ExceptionOrUtils.h>
 #include <LibWeb/Bindings/MainThreadVM.h>
+#include <LibWeb/CSS/CSSAnimation.h>
 #include <LibWeb/CSS/CSSStyleProperties.h>
 #include <LibWeb/CSS/ComputedProperties.h>
 #include <LibWeb/CSS/CountersSet.h>
@@ -29,6 +30,7 @@
 #include <LibWeb/CSS/PropertyID.h>
 #include <LibWeb/CSS/SelectorEngine.h>
 #include <LibWeb/CSS/StyleComputer.h>
+#include <LibWeb/CSS/StyleInvalidation.h>
 #include <LibWeb/CSS/StylePropertyMap.h>
 #include <LibWeb/CSS/StyleValues/DisplayStyleValue.h>
 #include <LibWeb/CSS/StyleValues/KeywordStyleValue.h>
@@ -67,6 +69,7 @@
 #include <LibWeb/HTML/HTMLOListElement.h>
 #include <LibWeb/HTML/HTMLOptGroupElement.h>
 #include <LibWeb/HTML/HTMLOptionElement.h>
+#include <LibWeb/HTML/HTMLScriptElement.h>
 #include <LibWeb/HTML/HTMLSelectElement.h>
 #include <LibWeb/HTML/HTMLSlotElement.h>
 #include <LibWeb/HTML/HTMLStyleElement.h>
@@ -82,8 +85,10 @@
 #include <LibWeb/HTML/Scripting/TemporaryExecutionContext.h>
 #include <LibWeb/HTML/TraversableNavigable.h>
 #include <LibWeb/HTML/Window.h>
+#include <LibWeb/HTML/XMLSerializer.h>
 #include <LibWeb/Infra/CharacterTypes.h>
 #include <LibWeb/Infra/Strings.h>
+#include <LibWeb/IntersectionObserver/IntersectionObserver.h>
 #include <LibWeb/Layout/BlockContainer.h>
 #include <LibWeb/Layout/InlineNode.h>
 #include <LibWeb/Layout/ListItemBox.h>
@@ -909,6 +914,7 @@ CSS::RequiredInvalidationAfterStyleChange Element::recompute_style(bool& did_cha
 
     recompute_pseudo_element_style(CSS::PseudoElement::Before);
     recompute_pseudo_element_style(CSS::PseudoElement::After);
+    recompute_pseudo_element_style(CSS::PseudoElement::Selection);
     if (m_rendered_in_top_layer)
         recompute_pseudo_element_style(CSS::PseudoElement::Backdrop);
     if (had_list_marker || m_computed_properties->display().is_list_item())
@@ -1005,7 +1011,6 @@ CSS::RequiredInvalidationAfterStyleChange Element::recompute_inherited_style()
 
     AbstractElement abstract_element { *this };
 
-    document().style_computer().compute_font(*computed_properties, abstract_element);
     document().style_computer().compute_property_values(*computed_properties, abstract_element);
 
     for (auto const& [property_id, old_value] : property_values_affected_by_inherited_style) {
@@ -1673,7 +1678,11 @@ bool Element::matches_placeholder_shown_pseudo_class() const
         auto const& input_element = static_cast<HTML::HTMLInputElement const&>(*this);
         return input_element.placeholder_element() && input_element.placeholder_value().has_value();
     }
-    // - FIXME: textarea elements that have a placeholder attribute whose value is currently being presented to the user.
+    // - textarea elements that have a placeholder attribute whose value is currently being presented to the user.
+    if (is<HTML::HTMLTextAreaElement>(*this) && has_attribute(HTML::AttributeNames::placeholder)) {
+        auto const& textarea_element = static_cast<HTML::HTMLTextAreaElement const&>(*this);
+        return textarea_element.placeholder_element() && textarea_element.placeholder_value().has_value();
+    }
     return false;
 }
 
@@ -1747,6 +1756,13 @@ bool Element::includes_properties_from_invalidation_set(CSS::InvalidationSet con
             case CSS::PseudoClass::LocalLink: {
                 return matches_local_link_pseudo_class();
             }
+            case CSS::PseudoClass::Root:
+                return is<HTML::HTMLHtmlElement>(*this);
+            case CSS::PseudoClass::Host:
+                return is_shadow_host();
+            case CSS::PseudoClass::Required:
+            case CSS::PseudoClass::Optional:
+                return is<HTML::HTMLInputElement>(*this) || is<HTML::HTMLSelectElement>(*this) || is<HTML::HTMLTextAreaElement>(*this);
             default:
                 VERIFY_NOT_REACHED();
             }
@@ -1889,8 +1905,8 @@ bool Element::is_potentially_scrollable(TreatOverflowClipOnBodyParentAsOverflowH
     const_cast<Document&>(document()).update_layout(UpdateLayoutReason::ElementIsPotentiallyScrollable);
     const_cast<Document&>(document()).update_style();
 
-    // NOTE: Since this should always be the body element, the body element must have a <html> element parent. See Document::body().
-    VERIFY(parent());
+    // NB: Since this should always be the body element, the body element must have a <html> element parent. See Document::body().
+    VERIFY(parent_element());
 
     // An element body (which will be the body element) is potentially scrollable if all of the following conditions are true:
     VERIFY(is<HTML::HTMLBodyElement>(this) || is<HTML::HTMLFrameSetElement>(this));
@@ -1900,17 +1916,29 @@ bool Element::is_potentially_scrollable(TreatOverflowClipOnBodyParentAsOverflowH
         return false;
 
     // - body’s parent element’s computed value of the overflow-x or overflow-y properties is neither visible nor clip.
-    if (parent()->layout_node()->computed_values().overflow_x() == CSS::Overflow::Visible || parent()->layout_node()->computed_values().overflow_y() == CSS::Overflow::Visible)
+    if (parent_element()->computed_properties()->overflow_x() == CSS::Overflow::Visible || parent_element()->computed_properties()->overflow_y() == CSS::Overflow::Visible)
         return false;
     // NOTE: When treating 'overflow:clip' as 'overflow:hidden', we can never fail this condition
-    if (treat_overflow_clip_on_body_parent_as_overflow_hidden == TreatOverflowClipOnBodyParentAsOverflowHidden::No && (parent()->layout_node()->computed_values().overflow_x() == CSS::Overflow::Clip || parent()->layout_node()->computed_values().overflow_y() == CSS::Overflow::Clip))
+    if (treat_overflow_clip_on_body_parent_as_overflow_hidden == TreatOverflowClipOnBodyParentAsOverflowHidden::No && (parent_element()->computed_properties()->overflow_x() == CSS::Overflow::Clip || parent_element()->computed_properties()->overflow_y() == CSS::Overflow::Clip))
         return false;
 
     // - body’s computed value of the overflow-x or overflow-y properties is neither visible nor clip.
-    if (first_is_one_of(layout_node()->computed_values().overflow_x(), CSS::Overflow::Visible, CSS::Overflow::Clip) || first_is_one_of(layout_node()->computed_values().overflow_y(), CSS::Overflow::Visible, CSS::Overflow::Clip))
+    if (first_is_one_of(computed_properties()->overflow_x(), CSS::Overflow::Visible, CSS::Overflow::Clip) || first_is_one_of(computed_properties()->overflow_y(), CSS::Overflow::Visible, CSS::Overflow::Clip))
         return false;
 
     return true;
+}
+
+bool Element::is_scroll_container() const
+{
+    // NB: We should only call this if we know that computed_properties has already been computed
+    VERIFY(computed_properties());
+
+    if (is_document_element())
+        return true;
+
+    return Layout::overflow_value_makes_box_a_scroll_container(computed_properties()->overflow_x())
+        || Layout::overflow_value_makes_box_a_scroll_container(computed_properties()->overflow_y());
 }
 
 // https://drafts.csswg.org/cssom-view/#dom-element-scrolltop
@@ -2052,7 +2080,7 @@ void Element::set_scroll_left(double x)
     // FIXME: Implement this in terms of calling "scroll the element".
     auto scroll_offset = paintable_box()->scroll_offset();
     scroll_offset.set_x(CSSPixels::nearest_value_for(x));
-    (void)paintable_box()->set_scroll_offset(scroll_offset);
+    paintable_box()->set_scroll_offset(scroll_offset);
 }
 
 void Element::set_scroll_top(double y)
@@ -2109,7 +2137,7 @@ void Element::set_scroll_top(double y)
     // FIXME: Implement this in terms of calling "scroll the element".
     auto scroll_offset = paintable_box()->scroll_offset();
     scroll_offset.set_y(CSSPixels::nearest_value_for(y));
-    (void)paintable_box()->set_scroll_offset(scroll_offset);
+    paintable_box()->set_scroll_offset(scroll_offset);
 }
 
 // https://drafts.csswg.org/cssom-view/#dom-element-scrollwidth
@@ -3274,10 +3302,10 @@ PseudoElement& Element::ensure_pseudo_element(CSS::PseudoElement type) const
     return *(m_pseudo_element_data->get(type).value());
 }
 
-void Element::set_custom_properties(Optional<CSS::PseudoElement> pseudo_element, OrderedHashMap<FlyString, CSS::StyleProperty> custom_properties)
+void Element::set_custom_property_data(Optional<CSS::PseudoElement> pseudo_element, RefPtr<CSS::CustomPropertyData const> data)
 {
     if (!pseudo_element.has_value()) {
-        m_custom_properties = move(custom_properties);
+        m_custom_property_data = move(data);
         return;
     }
 
@@ -3285,20 +3313,18 @@ void Element::set_custom_properties(Optional<CSS::PseudoElement> pseudo_element,
         return;
     }
 
-    ensure_pseudo_element(pseudo_element.value()).set_custom_properties(move(custom_properties));
+    ensure_pseudo_element(pseudo_element.value()).set_custom_property_data(move(data));
 }
 
-OrderedHashMap<FlyString, CSS::StyleProperty> const& Element::custom_properties(Optional<CSS::PseudoElement> pseudo_element) const
+RefPtr<CSS::CustomPropertyData const> Element::custom_property_data(Optional<CSS::PseudoElement> pseudo_element) const
 {
-    static OrderedHashMap<FlyString, CSS::StyleProperty> s_empty_custom_properties;
-
     if (!pseudo_element.has_value())
-        return m_custom_properties;
+        return m_custom_property_data;
 
     if (!CSS::Selector::PseudoElementSelector::is_known_pseudo_element_type(pseudo_element.value()))
-        return s_empty_custom_properties;
+        return nullptr;
 
-    return ensure_pseudo_element(pseudo_element.value()).custom_properties();
+    return ensure_pseudo_element(pseudo_element.value()).custom_property_data();
 }
 
 // https://drafts.csswg.org/cssom-view/#dom-element-scroll
@@ -3371,7 +3397,7 @@ GC::Ref<WebIDL::Promise> Element::scroll(double x, double y)
     auto scroll_offset = paintable_box()->scroll_offset();
     scroll_offset.set_x(CSSPixels::nearest_value_for(x));
     scroll_offset.set_y(CSSPixels::nearest_value_for(y));
-    (void)paintable_box()->set_scroll_offset(scroll_offset);
+    paintable_box()->set_scroll_offset(scroll_offset);
     auto scroll_promise = WebIDL::create_resolved_promise(realm(), JS::js_undefined());
 
     // 12. Return scrollPromise.
@@ -3441,7 +3467,7 @@ bool Element::check_visibility(Optional<CheckVisibilityOptions> options)
         return false;
 
     // 2. If an ancestor of this in the flat tree has content-visibility: hidden, return false.
-    for (auto element = parent_element(); element; element = element->parent_element()) {
+    for (auto* element = flat_tree_parent_element(); element; element = element->flat_tree_parent_element()) {
         if (element->computed_properties()->content_visibility() == CSS::ContentVisibility::Hidden)
             return false;
     }
@@ -3450,25 +3476,28 @@ bool Element::check_visibility(Optional<CheckVisibilityOptions> options)
     if (!options.has_value())
         return true;
 
-    // 3. If either the opacityProperty or the checkOpacity dictionary members of options are true, and this, or an ancestor of this in the flat tree, has a computed opacity value of 0, return false.
+    // 3. If either the opacityProperty or the checkOpacity dictionary members of options are true, and this, or an
+    //    ancestor of this in the flat tree, has a computed opacity value of 0, return false.
     if (options->opacity_property || options->check_opacity) {
-        for (auto* element = this; element; element = element->parent_element()) {
+        for (auto* element = this; element; element = element->flat_tree_parent_element()) {
             if (element->computed_properties()->opacity() == 0.0f)
                 return false;
         }
     }
 
-    // 4. If either the visibilityProperty or the checkVisibilityCSS dictionary members of options are true, and this is invisible, return false.
+    // 4. If either the visibilityProperty or the checkVisibilityCSS dictionary members of options are true, and this
+    //    is invisible, return false.
     if (options->visibility_property || options->check_visibility_css) {
         if (computed_properties()->visibility() == CSS::Visibility::Hidden)
             return false;
     }
 
-    // 5. If the contentVisibilityAuto dictionary member of options is true and an ancestor of this in the flat tree skips its contents due to content-visibility: auto, return false.
+    // 5. If the contentVisibilityAuto dictionary member of options is true and an ancestor of this in the flat tree
+    //    skips its contents due to content-visibility: auto, return false.
     // FIXME: Currently we do not skip any content if content-visibility is auto: https://drafts.csswg.org/css-contain-2/#proximity-to-the-viewport
     auto const skipped_contents_due_to_content_visibility_auto = false;
     if (options->content_visibility_auto && skipped_contents_due_to_content_visibility_auto) {
-        for (auto* element = this; element; element = element->parent_element()) {
+        for (auto* element = flat_tree_parent_element(); element; element = element->flat_tree_parent_element()) {
             if (element->computed_properties()->content_visibility() == CSS::ContentVisibility::Auto)
                 return false;
         }
@@ -3535,6 +3564,7 @@ bool Element::is_relevant_to_the_user()
         }
 
         // The element has a flat tree descendant that is captured in a view transition.
+        // FIXME: for_each_in_inclusive_subtree_of_type() doesn't walk the flat tree. For example, it doesn't walk from a slot to its assigned slottable.
         if (&element != this && element.captured_in_a_view_transition()) {
             has_relevant_contents = true;
             return TraversalDecision::Break;
@@ -3731,8 +3761,9 @@ void Element::set_scroll_offset(Optional<CSS::PseudoElement> pseudo_element_type
     if (pseudo_element_type.has_value()) {
         if (auto pseudo_element = get_pseudo_element(*pseudo_element_type); pseudo_element.has_value())
             pseudo_element->set_scroll_offset(offset);
+    } else {
+        m_scroll_offset = offset;
     }
-    m_scroll_offset = offset;
 }
 
 // https://html.spec.whatwg.org/multipage/dom.html#translation-mode
@@ -4381,7 +4412,7 @@ void Element::play_or_cancel_animations_after_display_property_change()
 
     auto has_display_none_inclusive_ancestor = this->has_inclusive_ancestor_with_display_none();
 
-    auto play_or_cancel_depending_on_display = [&](HashMap<FlyString, GC::Ref<Animations::Animation>>& animations) {
+    auto play_or_cancel_depending_on_display = [&](HashMap<FlyString, GC::Ref<CSS::CSSAnimation>>& animations) {
         for (auto& [_, animation] : animations) {
             if (has_display_none_inclusive_ancestor) {
                 animation->cancel();
@@ -4503,14 +4534,14 @@ GC::Ref<WebIDL::Promise> Element::request_pointer_lock(Optional<PointerLockOptio
 
 // The element to inherit style from.
 // If a pseudo-element is specified, this will return the element itself.
-// Otherwise, if this element is slotted somewhere, it will return the slot's element to inherit style from.
+// Otherwise, if this element is slotted somewhere, it will return the slot.
 // Otherwise, it will return the parent or shadow host element of this element.
 GC::Ptr<Element const> Element::element_to_inherit_style_from(Optional<CSS::PseudoElement> pseudo_element) const
 {
     if (pseudo_element.has_value())
         return this;
-    while (auto const slot = assigned_slot_internal())
-        return slot->element_to_inherit_style_from({});
+    if (auto const slot = assigned_slot_internal())
+        return slot;
     return parent_or_shadow_host_element();
 }
 

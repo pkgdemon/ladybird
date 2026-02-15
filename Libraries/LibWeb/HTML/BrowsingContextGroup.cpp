@@ -26,8 +26,9 @@ BrowsingContextGroup::BrowsingContextGroup(GC::Ref<Web::Page> page)
     user_agent_browsing_context_group_set().set(*this);
 }
 
-BrowsingContextGroup::~BrowsingContextGroup()
+void BrowsingContextGroup::finalize()
 {
+    Base::finalize();
     user_agent_browsing_context_group_set().remove(*this);
 }
 
@@ -58,8 +59,6 @@ auto BrowsingContextGroup::create_a_new_browsing_context_group_and_document(GC::
 // https://html.spec.whatwg.org/multipage/browsers.html#bcg-append
 void BrowsingContextGroup::append(BrowsingContext& browsing_context)
 {
-    VERIFY(browsing_context.is_top_level());
-
     // 1. Append browsingContext to group's browsing context set.
     m_browsing_context_set.set(browsing_context);
 

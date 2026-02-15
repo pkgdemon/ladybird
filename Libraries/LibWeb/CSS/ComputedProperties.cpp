@@ -9,6 +9,9 @@
 #include <AK/TypeCasts.h>
 #include <LibCore/DirIterator.h>
 #include <LibGC/CellAllocator.h>
+#include <LibWeb/Animations/AnimationTimeline.h>
+#include <LibWeb/Animations/DocumentTimeline.h>
+#include <LibWeb/Animations/ScrollTimeline.h>
 #include <LibWeb/CSS/Clip.h>
 #include <LibWeb/CSS/ComputedProperties.h>
 #include <LibWeb/CSS/FontComputer.h>
@@ -16,6 +19,7 @@
 #include <LibWeb/CSS/StyleValues/ColorSchemeStyleValue.h>
 #include <LibWeb/CSS/StyleValues/ContentStyleValue.h>
 #include <LibWeb/CSS/StyleValues/CounterDefinitionsStyleValue.h>
+#include <LibWeb/CSS/StyleValues/CounterStyleStyleValue.h>
 #include <LibWeb/CSS/StyleValues/CounterStyleValue.h>
 #include <LibWeb/CSS/StyleValues/CustomIdentStyleValue.h>
 #include <LibWeb/CSS/StyleValues/DisplayStyleValue.h>
@@ -34,6 +38,7 @@
 #include <LibWeb/CSS/StyleValues/PositionStyleValue.h>
 #include <LibWeb/CSS/StyleValues/RectStyleValue.h>
 #include <LibWeb/CSS/StyleValues/RepeatStyleStyleValue.h>
+#include <LibWeb/CSS/StyleValues/ScrollFunctionStyleValue.h>
 #include <LibWeb/CSS/StyleValues/ScrollbarColorStyleValue.h>
 #include <LibWeb/CSS/StyleValues/ShadowStyleValue.h>
 #include <LibWeb/CSS/StyleValues/StringStyleValue.h>
@@ -42,6 +47,7 @@
 #include <LibWeb/CSS/StyleValues/TextUnderlinePositionStyleValue.h>
 #include <LibWeb/CSS/StyleValues/TimeStyleValue.h>
 #include <LibWeb/CSS/StyleValues/TransformationStyleValue.h>
+#include <LibWeb/DOM/Document.h>
 #include <LibWeb/Layout/BlockContainer.h>
 #include <LibWeb/Layout/Node.h>
 #include <LibWeb/Platform/FontPlugin.h>
@@ -267,76 +273,20 @@ Size ComputedProperties::size_value(PropertyID id) const
     return Size::make_auto();
 }
 
-Optional<LengthPercentage> ComputedProperties::length_percentage(PropertyID id, Layout::NodeWithStyle const& layout_node, ClampNegativeLengths disallow_negative_lengths) const
-{
-    auto const& value = property(id);
-
-    if (value.is_calculated())
-        return LengthPercentage { value.as_calculated() };
-
-    if (value.is_percentage()) {
-        auto percentage = value.as_percentage().percentage();
-
-        // FIXME: This value can be negative as interpolation does not yet clamp values to allowed ranges - remove this
-        //        once we do that.
-        if (disallow_negative_lengths == ClampNegativeLengths::Yes && percentage.as_fraction() < 0)
-            return {};
-
-        return percentage;
-    }
-
-    if (value.is_length()) {
-        auto length = value.as_length().length();
-
-        // FIXME: This value can be negative as interpolation does not yet clamp values to allowed ranges - remove this
-        //        once we do that.
-        if (disallow_negative_lengths == ClampNegativeLengths::Yes && length.to_px(layout_node) < 0)
-            return {};
-
-        return length;
-    }
-
-    return {};
-}
-
 Length ComputedProperties::length(PropertyID property_id) const
 {
     return property(property_id).as_length().length();
 }
 
-LengthBox ComputedProperties::length_box(PropertyID left_id, PropertyID top_id, PropertyID right_id, PropertyID bottom_id, Layout::NodeWithStyle const& layout_node, ClampNegativeLengths disallow_negative_lengths, LengthPercentageOrAuto const& default_value) const
+LengthBox ComputedProperties::length_box(PropertyID left_id, PropertyID top_id, PropertyID right_id, PropertyID bottom_id, LengthPercentageOrAuto const& default_value) const
 {
     auto length_box_side = [&](PropertyID id) -> LengthPercentageOrAuto {
         auto const& value = property(id);
 
-        if (value.is_calculated())
-            return LengthPercentage { value.as_calculated() };
+        if (value.is_calculated() || value.is_percentage() || value.is_length() || value.has_auto())
+            return LengthPercentageOrAuto::from_style_value(value);
 
-        if (value.is_percentage()) {
-            auto percentage = value.as_percentage().percentage();
-
-            // FIXME: This value can be negative as interpolation does not yet clamp values to allowed ranges - remove this
-            //        once we do that.
-            if (disallow_negative_lengths == ClampNegativeLengths::Yes && percentage.as_fraction() < 0)
-                return default_value;
-
-            return percentage;
-        }
-
-        if (value.is_length()) {
-            auto length = value.as_length().length();
-
-            // FIXME: This value can be negative as interpolation does not yet clamp values to allowed ranges - remove this
-            //        once we do that.
-            if (disallow_negative_lengths == ClampNegativeLengths::Yes && length.to_px(layout_node) < 0)
-                return default_value;
-
-            return value.as_length().length();
-        }
-
-        if (value.has_auto())
-            return LengthPercentageOrAuto::make_auto();
-
+        // FIXME: Handle anchor sizes
         return default_value;
     };
 
@@ -520,6 +470,42 @@ float ComputedProperties::opacity() const
 float ComputedProperties::fill_opacity() const
 {
     return property(PropertyID::FillOpacity).as_number().number();
+}
+
+Vector<Variant<LengthPercentage, float>> ComputedProperties::stroke_dasharray() const
+{
+    auto const& value = property(PropertyID::StrokeDasharray);
+
+    // none
+    if (value.is_keyword() && value.to_keyword() == Keyword::None)
+        return {};
+
+    auto const& stroke_dasharray = value.as_value_list();
+    Vector<Variant<LengthPercentage, float>> dashes;
+
+    for (auto const& value : stroke_dasharray.values()) {
+        if (value->is_length()) {
+            dashes.append(LengthPercentage { value->as_length().length() });
+        } else if (value->is_percentage()) {
+            dashes.append(LengthPercentage { value->as_percentage().percentage() });
+        } else if (value->is_calculated()) {
+            auto const& calculated_value = value->as_calculated();
+
+            if (calculated_value.resolves_to_length())
+                dashes.append(LengthPercentage { value->as_calculated() });
+            else if (calculated_value.resolves_to_number())
+                dashes.append(calculated_value.resolve_number({}).value());
+            else
+                VERIFY_NOT_REACHED();
+
+        } else if (value->is_number()) {
+            dashes.append(value->as_number().number());
+        } else {
+            VERIFY_NOT_REACHED();
+        }
+    }
+
+    return dashes;
 }
 
 StrokeLinecap ComputedProperties::stroke_linecap() const
@@ -1416,9 +1402,18 @@ TextTransform ComputedProperties::text_transform() const
 ListStyleType ComputedProperties::list_style_type() const
 {
     auto const& value = property(PropertyID::ListStyleType);
+
+    if (value.to_keyword() == Keyword::None)
+        return Empty {};
+
     if (value.is_string())
         return value.as_string().string_value().to_string();
-    return keyword_to_counter_style_name_keyword(value.to_keyword()).release_value();
+
+    if (auto keyword = value.as_counter_style().to_counter_style_name_keyword(); keyword.has_value())
+        return keyword.release_value();
+
+    // FIXME: Support user defined counter styles.
+    return Empty {};
 }
 
 ListStylePosition ComputedProperties::list_style_position() const
@@ -1552,275 +1547,20 @@ Optional<FlyString> ComputedProperties::font_language_override() const
     return {};
 }
 
-Gfx::ShapeFeatures ComputedProperties::font_features() const
+FontFeatureData ComputedProperties::font_feature_data() const
 {
-    HashMap<StringView, u8> merged_features;
-
-    auto font_variant_features = [&]() {
-        HashMap<StringView, u8> features;
-
-        // 6.4 https://drafts.csswg.org/css-fonts/#font-variant-ligatures-prop
-        auto ligature_or_null = font_variant_ligatures();
-
-        auto disable_all_ligatures = [&]() {
-            features.set("liga"sv, 0);
-            features.set("clig"sv, 0);
-            features.set("dlig"sv, 0);
-            features.set("hlig"sv, 0);
-            features.set("calt"sv, 0);
-        };
-
-        if (ligature_or_null.has_value()) {
-            auto ligature = ligature_or_null.release_value();
-            if (ligature.none) {
-                // Specifies that all types of ligatures and contextual forms covered by this property are explicitly disabled.
-                disable_all_ligatures();
-            } else {
-                switch (ligature.common) {
-                case Gfx::FontVariantLigatures::Common::Common:
-                    // Enables display of common ligatures (OpenType features: liga, clig).
-                    features.set("liga"sv, 1);
-                    features.set("clig"sv, 1);
-                    break;
-                case Gfx::FontVariantLigatures::Common::NoCommon:
-                    // Disables display of common ligatures (OpenType features: liga, clig).
-                    features.set("liga"sv, 0);
-                    features.set("clig"sv, 0);
-                    break;
-                case Gfx::FontVariantLigatures::Common::Unset:
-                    break;
-                }
-
-                switch (ligature.discretionary) {
-                case Gfx::FontVariantLigatures::Discretionary::Discretionary:
-                    // Enables display of discretionary ligatures (OpenType feature: dlig).
-                    features.set("dlig"sv, 1);
-                    break;
-                case Gfx::FontVariantLigatures::Discretionary::NoDiscretionary:
-                    // Disables display of discretionary ligatures (OpenType feature: dlig).
-                    features.set("dlig"sv, 0);
-                    break;
-                case Gfx::FontVariantLigatures::Discretionary::Unset:
-                    break;
-                }
-
-                switch (ligature.historical) {
-                case Gfx::FontVariantLigatures::Historical::Historical:
-                    // Enables display of historical ligatures (OpenType feature: hlig).
-                    features.set("hlig"sv, 1);
-                    break;
-                case Gfx::FontVariantLigatures::Historical::NoHistorical:
-                    // Disables display of historical ligatures (OpenType feature: hlig).
-                    features.set("hlig"sv, 0);
-                    break;
-                case Gfx::FontVariantLigatures::Historical::Unset:
-                    break;
-                }
-
-                switch (ligature.contextual) {
-                case Gfx::FontVariantLigatures::Contextual::Contextual:
-                    // Enables display of contextual ligatures (OpenType feature: calt).
-                    features.set("calt"sv, 1);
-                    break;
-                case Gfx::FontVariantLigatures::Contextual::NoContextual:
-                    // Disables display of contextual ligatures (OpenType feature: calt).
-                    features.set("calt"sv, 0);
-                    break;
-                case Gfx::FontVariantLigatures::Contextual::Unset:
-                    break;
-                }
-            }
-        } else if (text_rendering() == CSS::TextRendering::Optimizespeed) {
-            // AD-HOC: Disable ligatures if font-variant-ligatures is set to normal and text rendering is set to optimize speed.
-            disable_all_ligatures();
-        } else {
-            // A value of normal specifies that common default features are enabled, as described in detail in the next section.
-            features.set("liga"sv, 1);
-            features.set("clig"sv, 1);
-        }
-
-        // 6.5 https://drafts.csswg.org/css-fonts/#font-variant-position-prop
-        switch (font_variant_position()) {
-        case CSS::FontVariantPosition::Normal:
-            // None of the features listed below are enabled.
-            break;
-        case CSS::FontVariantPosition::Sub:
-            // Enables display of subscripts (OpenType feature: subs).
-            features.set("subs"sv, 1);
-            break;
-        case CSS::FontVariantPosition::Super:
-            // Enables display of superscripts (OpenType feature: sups).
-            features.set("sups"sv, 1);
-            break;
-        default:
-            break;
-        }
-
-        // 6.6 https://drafts.csswg.org/css-fonts/#font-variant-caps-prop
-        switch (font_variant_caps()) {
-        case CSS::FontVariantCaps::Normal:
-            // None of the features listed below are enabled.
-            break;
-        case CSS::FontVariantCaps::SmallCaps:
-            // Enables display of small capitals (OpenType feature: smcp). Small-caps glyphs typically use the form of uppercase letters but are reduced to the size of lowercase letters.
-            features.set("smcp"sv, 1);
-            break;
-        case CSS::FontVariantCaps::AllSmallCaps:
-            // Enables display of small capitals for both upper and lowercase letters (OpenType features: c2sc, smcp).
-            features.set("c2sc"sv, 1);
-            features.set("smcp"sv, 1);
-            break;
-        case CSS::FontVariantCaps::PetiteCaps:
-            // Enables display of petite capitals (OpenType feature: pcap).
-            features.set("pcap"sv, 1);
-            break;
-        case CSS::FontVariantCaps::AllPetiteCaps:
-            // Enables display of petite capitals for both upper and lowercase letters (OpenType features: c2pc, pcap).
-            features.set("c2pc"sv, 1);
-            features.set("pcap"sv, 1);
-            break;
-        case CSS::FontVariantCaps::Unicase:
-            // Enables display of mixture of small capitals for uppercase letters with normal lowercase letters (OpenType feature: unic).
-            features.set("unic"sv, 1);
-            break;
-        case CSS::FontVariantCaps::TitlingCaps:
-            // Enables display of titling capitals (OpenType feature: titl).
-            features.set("titl"sv, 1);
-            break;
-        default:
-            break;
-        }
-
-        // 6.7 https://drafts.csswg.org/css-fonts/#font-variant-numeric-prop
-        auto numeric_or_null = font_variant_numeric();
-        if (numeric_or_null.has_value()) {
-            auto numeric = numeric_or_null.release_value();
-            if (numeric.figure == Gfx::FontVariantNumeric::Figure::Oldstyle) {
-                // Enables display of old-style numerals (OpenType feature: onum).
-                features.set("onum"sv, 1);
-            } else if (numeric.figure == Gfx::FontVariantNumeric::Figure::Lining) {
-                // Enables display of lining numerals (OpenType feature: lnum).
-                features.set("lnum"sv, 1);
-            }
-
-            if (numeric.spacing == Gfx::FontVariantNumeric::Spacing::Proportional) {
-                // Enables display of proportional numerals (OpenType feature: pnum).
-                features.set("pnum"sv, 1);
-            } else if (numeric.spacing == Gfx::FontVariantNumeric::Spacing::Tabular) {
-                // Enables display of tabular numerals (OpenType feature: tnum).
-                features.set("tnum"sv, 1);
-            }
-
-            if (numeric.fraction == Gfx::FontVariantNumeric::Fraction::Diagonal) {
-                // Enables display of diagonal fractions (OpenType feature: frac).
-                features.set("frac"sv, 1);
-            } else if (numeric.fraction == Gfx::FontVariantNumeric::Fraction::Stacked) {
-                // Enables display of stacked fractions (OpenType feature: afrc).
-                features.set("afrc"sv, 1);
-                features.set("afrc"sv, 1);
-            }
-
-            if (numeric.ordinal) {
-                // Enables display of letter forms used with ordinal numbers (OpenType feature: ordn).
-                features.set("ordn"sv, 1);
-            }
-            if (numeric.slashed_zero) {
-                // Enables display of slashed zeros (OpenType feature: zero).
-                features.set("zero"sv, 1);
-            }
-        }
-
-        // 6.10 https://drafts.csswg.org/css-fonts/#font-variant-east-asian-prop
-        auto east_asian_or_null = font_variant_east_asian();
-        if (east_asian_or_null.has_value()) {
-            auto east_asian = east_asian_or_null.release_value();
-            switch (east_asian.variant) {
-            case Gfx::FontVariantEastAsian::Variant::Jis78:
-                // Enables display of JIS78 forms (OpenType feature: jp78).
-                features.set("jp78"sv, 1);
-                break;
-            case Gfx::FontVariantEastAsian::Variant::Jis83:
-                // Enables display of JIS83 forms (OpenType feature: jp83).
-                features.set("jp83"sv, 1);
-                break;
-            case Gfx::FontVariantEastAsian::Variant::Jis90:
-                // Enables display of JIS90 forms (OpenType feature: jp90).
-                features.set("jp90"sv, 1);
-                break;
-            case Gfx::FontVariantEastAsian::Variant::Jis04:
-                // Enables display of JIS04 forms (OpenType feature: jp04).
-                features.set("jp04"sv, 1);
-                break;
-            case Gfx::FontVariantEastAsian::Variant::Simplified:
-                // Enables display of simplified forms (OpenType feature: smpl).
-                features.set("smpl"sv, 1);
-                break;
-            case Gfx::FontVariantEastAsian::Variant::Traditional:
-                // Enables display of traditional forms (OpenType feature: trad).
-                features.set("trad"sv, 1);
-                break;
-            default:
-                break;
-            }
-            switch (east_asian.width) {
-            case Gfx::FontVariantEastAsian::Width::FullWidth:
-                // Enables display of full-width forms (OpenType feature: fwid).
-                features.set("fwid"sv, 1);
-                break;
-            case Gfx::FontVariantEastAsian::Width::Proportional:
-                // Enables display of proportional-width forms (OpenType feature: pwid).
-                features.set("pwid"sv, 1);
-                break;
-            default:
-                break;
-            }
-            if (east_asian.ruby) {
-                // Enables display of ruby forms (OpenType feature: ruby).
-                features.set("ruby"sv, 1);
-            }
-        }
-
-        // FIXME: vkrn should be enabled for vertical text.
-        switch (font_kerning()) {
-        case CSS::FontKerning::Auto:
-            // AD-HOC: Disable kerning if font-kerning is set to normal and text rendering is set to optimize speed.
-            features.set("kern"sv, text_rendering() != CSS::TextRendering::Optimizespeed ? 1 : 0);
-            break;
-        case CSS::FontKerning::Normal:
-            features.set("kern"sv, 1);
-            break;
-        case CSS::FontKerning::None:
-            features.set("kern"sv, 0);
-            break;
-        default:
-            break;
-        }
-
-        return features;
+    return {
+        .font_variant_alternates = font_variant_alternates(),
+        .font_variant_caps = font_variant_caps(),
+        .font_variant_east_asian = font_variant_east_asian(),
+        .font_variant_emoji = font_variant_emoji(),
+        .font_variant_ligatures = font_variant_ligatures(),
+        .font_variant_numeric = font_variant_numeric(),
+        .font_variant_position = font_variant_position(),
+        .font_feature_settings = font_feature_settings(),
+        .font_kerning = font_kerning(),
+        .text_rendering = text_rendering(),
     };
-
-    // https://www.w3.org/TR/css-fonts-3/#feature-precedence
-
-    // FIXME: 1. Font features enabled by default, including features required for a given script.
-
-    // FIXME: 2. If the font is defined via an @font-face rule, the font features implied by the font-feature-settings descriptor in the @font-face rule.
-
-    // 3. Font features implied by the value of the ‘font-variant’ property, the related ‘font-variant’ subproperties and any other CSS property that uses OpenType features (e.g. the ‘font-kerning’ property).
-    merged_features.update(font_variant_features());
-
-    // FIXME: 4. Feature settings determined by properties other than ‘font-variant’ or ‘font-feature-settings’. For example, setting a non-default value for the ‘letter-spacing’ property disables common ligatures.
-
-    // 5. Font features implied by the value of ‘font-feature-settings’ property.
-    merged_features.update(font_feature_settings());
-
-    Gfx::ShapeFeatures shape_features;
-    shape_features.ensure_capacity(merged_features.size());
-
-    for (auto& it : merged_features) {
-        shape_features.unchecked_append({ { it.key[0], it.key[1], it.key[2], it.key[3] }, static_cast<u32>(it.value) });
-    }
-
-    return shape_features;
 }
 
 Optional<Gfx::FontVariantAlternates> ComputedProperties::font_variant_alternates() const
@@ -2021,7 +1761,7 @@ FontVariantPosition ComputedProperties::font_variant_position() const
     return keyword_to_font_variant_position(value.to_keyword()).release_value();
 }
 
-HashMap<StringView, u8> ComputedProperties::font_feature_settings() const
+HashMap<FlyString, u8> ComputedProperties::font_feature_settings() const
 {
     auto const& value = property(PropertyID::FontFeatureSettings);
 
@@ -2030,7 +1770,7 @@ HashMap<StringView, u8> ComputedProperties::font_feature_settings() const
 
     if (value.is_value_list()) {
         auto const& feature_tags = value.as_value_list().values();
-        HashMap<StringView, u8> result;
+        HashMap<FlyString, u8> result;
         result.ensure_capacity(feature_tags.size());
         for (auto const& tag_value : feature_tags) {
             auto const& feature_tag = tag_value->as_open_type_tagged();
@@ -2359,7 +2099,7 @@ Optional<FlyString> ComputedProperties::view_transition_name() const
     return {};
 }
 
-Vector<ComputedProperties::AnimationProperties> ComputedProperties::animations() const
+Vector<ComputedProperties::AnimationProperties> ComputedProperties::animations(DOM::AbstractElement const& abstract_element) const
 {
     auto const& animation_name_values = property(PropertyID::AnimationName).as_value_list().values();
 
@@ -2381,7 +2121,8 @@ Vector<ComputedProperties::AnimationProperties> ComputedProperties::animations()
             PropertyID::AnimationDelay,
             PropertyID::AnimationFillMode,
             PropertyID::AnimationComposition,
-            PropertyID::AnimationName });
+            PropertyID::AnimationName,
+            PropertyID::AnimationTimeline });
 
     Vector<AnimationProperties> animations;
 
@@ -2401,6 +2142,7 @@ Vector<ComputedProperties::AnimationProperties> ComputedProperties::animations()
         auto animation_delay_style_value = coordinated_properties.get(PropertyID::AnimationDelay).value()[i];
         auto animation_fill_mode_style_value = coordinated_properties.get(PropertyID::AnimationFillMode).value()[i];
         auto animation_composition_style_value = coordinated_properties.get(PropertyID::AnimationComposition).value()[i];
+        auto animation_timeline_style_value = coordinated_properties.get(PropertyID::AnimationTimeline).value()[i];
 
         // https://drafts.csswg.org/css-animations-2/#animation-duration
         auto duration = [&] -> Variant<double, String> {
@@ -2454,6 +2196,46 @@ Vector<ComputedProperties::AnimationProperties> ComputedProperties::animations()
             VERIFY_NOT_REACHED();
         }();
 
+        // https://drafts.csswg.org/css-animations-2/#animation-timeline
+        auto const& timeline = [&]() -> GC::Ptr<Animations::AnimationTimeline> {
+            // auto
+            // The animation’s timeline is a DocumentTimeline, more specifically the default document timeline.
+            if (animation_timeline_style_value->to_keyword() == Keyword::Auto)
+                return abstract_element.document().timeline();
+
+            // none
+            // The animation is not associated with a timeline.
+            if (animation_timeline_style_value->to_keyword() == Keyword::None)
+                return nullptr;
+
+            // <dashed-ident>
+            // FIXME: If a named scroll progress timeline or view progress timeline is in scope on this element, use the
+            //        referenced timeline as defined in Scroll-driven Animations §  Declaring a Named Timeline’s Scope:
+            //        the timeline-scope property. Otherwise the animation is not associated with a timeline.
+
+            // <scroll()>
+            // Use the scroll progress timeline indicated by the given scroll() function. See Scroll-driven Animations
+            // § 2.2.1 The scroll() notation.
+            if (animation_timeline_style_value->is_scroll_function()) {
+                auto const& scroll_function = animation_timeline_style_value->as_scroll_function();
+
+                Animations::ScrollTimeline::AnonymousSource source {
+                    .scroller = scroll_function.scroller(),
+                    .target = abstract_element,
+                };
+
+                return Animations::ScrollTimeline::create(abstract_element.element().realm(), abstract_element.document(), source, Animations::css_axis_to_bindings_scroll_axis(scroll_function.axis()));
+            }
+
+            //<view()>
+            // FIXME: Use the view progress timeline indicated by the given view() function. See Scroll-driven
+            //        Animations § 3.3.1 The view() notation.
+
+            // FIXME: We fall back to document timeline for now as though we don't support the `animation-timeline`
+            //        property at all
+            return abstract_element.document().timeline();
+        }();
+
         animations.append(AnimationProperties {
             .duration = duration,
             .timing_function = timing_function,
@@ -2464,6 +2246,7 @@ Vector<ComputedProperties::AnimationProperties> ComputedProperties::animations()
             .fill_mode = fill_mode,
             .composition = composition,
             .name = name,
+            .timeline = timeline,
         });
     }
 
@@ -2716,7 +2499,7 @@ WillChange ComputedProperties::will_change() const
 ValueComparingNonnullRefPtr<Gfx::FontCascadeList const> ComputedProperties::computed_font_list(FontComputer const& font_computer) const
 {
     if (!m_cached_computed_font_list) {
-        const_cast<ComputedProperties*>(this)->m_cached_computed_font_list = font_computer.compute_font_for_style_values(property(PropertyID::FontFamily), font_size(), font_slope(), font_weight(), font_width(), font_variation_settings());
+        const_cast<ComputedProperties*>(this)->m_cached_computed_font_list = font_computer.compute_font_for_style_values(property(PropertyID::FontFamily), font_size(), font_slope(), font_weight(), font_width(), font_optical_sizing(), font_variation_settings(), font_feature_data());
         VERIFY(!m_cached_computed_font_list->is_empty());
     }
 
@@ -2762,6 +2545,12 @@ Percentage ComputedProperties::font_width() const
 int ComputedProperties::font_slope() const
 {
     return property(PropertyID::FontStyle).as_font_style().to_font_slope();
+}
+
+FontOpticalSizing ComputedProperties::font_optical_sizing() const
+{
+    auto const& value = property(PropertyID::FontOpticalSizing);
+    return keyword_to_font_optical_sizing(value.to_keyword()).release_value();
 }
 
 }

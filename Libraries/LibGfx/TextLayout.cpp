@@ -9,23 +9,89 @@
 
 #include <AK/Utf16String.h>
 #include <AK/Utf16View.h>
+#include <LibGfx/Font/Font.h>
 #include <LibGfx/Point.h>
 #include <LibGfx/TextLayout.h>
+#include <core/SkFont.h>
+#include <core/SkTextBlob.h>
 #include <harfbuzz/hb.h>
 
 namespace Gfx {
 
-FloatRect GlyphRun::bounding_rect() const
+struct GlyphRun::CachedTextBlob {
+    sk_sp<SkTextBlob> blob;
+    FloatRect bounds;
+    float scale { 0 };
+};
+
+GlyphRun::GlyphRun(Vector<DrawGlyph>&& glyphs, NonnullRefPtr<Font const> font, TextType text_type, float width)
+    : m_glyphs(move(glyphs))
+    , m_font(move(font))
+    , m_text_type(text_type)
+    , m_width(width)
 {
-    if (glyphs().is_empty())
-        return {};
-    auto const& first = glyphs().first();
-    FloatRect result { first.position, { first.glyph_width, m_line_height } };
-    for (auto const& glyph : glyphs()) {
-        FloatRect glyph_rect { glyph.position, { glyph.glyph_width, m_line_height } };
-        result.unite(glyph_rect);
+}
+
+GlyphRun::~GlyphRun() = default;
+
+NonnullRefPtr<GlyphRun> GlyphRun::slice(size_t start, size_t length) const
+{
+    Vector<DrawGlyph> sliced_glyphs;
+    sliced_glyphs.ensure_capacity(length);
+
+    float width = 0;
+    for (size_t i = start; i < start + length; ++i) {
+        sliced_glyphs.unchecked_append(m_glyphs[i]);
+        width += m_glyphs[i].glyph_width;
     }
-    return result;
+
+    return adopt_ref(*new GlyphRun(move(sliced_glyphs), m_font, m_text_type, width));
+}
+
+void GlyphRun::ensure_text_blob(float scale) const
+{
+    if (m_cached_text_blob && m_cached_text_blob->scale == scale)
+        return;
+
+    auto sk_font = m_font->skia_font(scale);
+    auto glyph_count = m_glyphs.size();
+
+    m_cached_text_blob = make<CachedTextBlob>();
+    m_cached_text_blob->scale = scale;
+
+    if (glyph_count == 0)
+        return;
+
+    SkTextBlobBuilder builder;
+    auto const& run = builder.allocRunPos(sk_font, glyph_count);
+
+    float font_ascent = m_font->pixel_metrics().ascent;
+    for (size_t i = 0; i < glyph_count; ++i) {
+        run.glyphs[i] = m_glyphs[i].glyph_id;
+        run.pos[i * 2] = m_glyphs[i].position.x() * scale;
+        run.pos[i * 2 + 1] = (m_glyphs[i].position.y() + font_ascent) * scale;
+    }
+
+    m_cached_text_blob->blob = builder.make();
+
+    if (m_cached_text_blob->blob) {
+        auto const& sk_bounds = m_cached_text_blob->blob->bounds();
+        m_cached_text_blob->bounds = { sk_bounds.x(), sk_bounds.y(), sk_bounds.width(), sk_bounds.height() };
+    }
+}
+
+FloatRect GlyphRun::cached_blob_bounds() const
+{
+    if (!m_cached_text_blob)
+        return {};
+    return m_cached_text_blob->bounds;
+}
+
+SkTextBlob* GlyphRun::cached_skia_text_blob() const
+{
+    if (!m_cached_text_blob || !m_cached_text_blob->blob)
+        return nullptr;
+    return m_cached_text_blob->blob.get();
 }
 
 Vector<NonnullRefPtr<GlyphRun>> shape_text(FloatPoint baseline_start, Utf16View const& string, FontCascadeList const& font_cascade_list)
@@ -41,7 +107,7 @@ Vector<NonnullRefPtr<GlyphRun>> shape_text(FloatPoint baseline_start, Utf16View 
     FloatPoint last_position = baseline_start;
 
     auto add_run = [&runs, &last_position](Utf16View const& string, Font const& font) {
-        auto run = shape_text(last_position, 0, string, font, GlyphRun::TextType::Common, {});
+        auto run = shape_text(last_position, 0, string, font, GlyphRun::TextType::Common);
         last_position.translate_by(run->width(), 0);
         runs.append(*run);
     };
@@ -67,7 +133,7 @@ Vector<NonnullRefPtr<GlyphRun>> shape_text(FloatPoint baseline_start, Utf16View 
     return runs;
 }
 
-static hb_buffer_t* setup_text_shaping(Utf16View const& string, Font const& font, ShapeFeatures const& features, GlyphRun::TextType text_type)
+static hb_buffer_t* setup_text_shaping(Utf16View const& string, Font const& font, GlyphRun::TextType text_type)
 {
     hb_buffer_t* buffer = hb_buffer_create();
 
@@ -93,9 +159,9 @@ static hb_buffer_t* setup_text_shaping(Utf16View const& string, Font const& font
     auto* hb_font = font.harfbuzz_font();
     hb_feature_t const* hb_features_data = nullptr;
     Vector<hb_feature_t, 4> hb_features;
-    if (!features.is_empty()) {
-        hb_features.ensure_capacity(features.size());
-        for (auto const& feature : features) {
+    if (!font.features().is_empty()) {
+        hb_features.ensure_capacity(font.features().size());
+        for (auto const& feature : font.features()) {
             hb_features.unchecked_append({
                 .tag = HB_TAG(feature.tag[0], feature.tag[1], feature.tag[2], feature.tag[3]),
                 .value = feature.value,
@@ -106,21 +172,15 @@ static hb_buffer_t* setup_text_shaping(Utf16View const& string, Font const& font
         hb_features_data = hb_features.data();
     }
 
-    hb_shape(hb_font, buffer, hb_features_data, features.size());
+    hb_shape(hb_font, buffer, hb_features_data, font.features().size());
 
     return buffer;
 }
 
-NonnullRefPtr<GlyphRun> shape_text(FloatPoint baseline_start, float letter_spacing, Utf16View const& string, Font const& font, GlyphRun::TextType text_type, ShapeFeatures const& features)
+NonnullRefPtr<GlyphRun> shape_text(FloatPoint baseline_start, float letter_spacing, Utf16View const& string, Font const& font, GlyphRun::TextType text_type)
 {
     auto const& metrics = font.pixel_metrics();
     auto& shaping_cache = font.shaping_cache();
-
-    // NOTE: We only cache shaping results for a specific set of features. If the features change, we clear the cache.
-    if (shaping_cache.features != features) {
-        shaping_cache.clear();
-        shaping_cache.features = features;
-    }
 
     // FIXME: The cache currently grows unbounded. We should have some limit and LRU mechanism.
     auto get_or_create_buffer = [&] -> hb_buffer_t* {
@@ -129,7 +189,7 @@ NonnullRefPtr<GlyphRun> shape_text(FloatPoint baseline_start, float letter_spaci
             if (code_unit < 128) {
                 auto*& cache_slot = shaping_cache.single_ascii_character_map[code_unit];
                 if (!cache_slot) {
-                    cache_slot = setup_text_shaping(string, font, features, text_type);
+                    cache_slot = setup_text_shaping(string, font, text_type);
                 }
                 return cache_slot;
             }
@@ -139,7 +199,7 @@ NonnullRefPtr<GlyphRun> shape_text(FloatPoint baseline_start, float letter_spaci
             it != shaping_cache.map.end()) {
             return it->value;
         }
-        auto* buffer = setup_text_shaping(string, font, features, text_type);
+        auto* buffer = setup_text_shaping(string, font, text_type);
         shaping_cache.map.set(Utf16String::from_utf16(string), buffer);
         return buffer;
     };
@@ -189,12 +249,12 @@ NonnullRefPtr<GlyphRun> shape_text(FloatPoint baseline_start, float letter_spaci
         point.translate_by(letter_spacing, 0);
     }
 
-    return adopt_ref(*new GlyphRun(move(glyph_run), font, text_type, point.x() - baseline_start.x(), metrics.ascent + metrics.descent));
+    return adopt_ref(*new GlyphRun(move(glyph_run), font, text_type, point.x() - baseline_start.x()));
 }
 
-float measure_text_width(Utf16View const& string, Font const& font, ShapeFeatures const& features)
+float measure_text_width(Utf16View const& string, Font const& font)
 {
-    auto* buffer = setup_text_shaping(string, font, features, GlyphRun::TextType::Common);
+    auto* buffer = setup_text_shaping(string, font, GlyphRun::TextType::Common);
 
     u32 glyph_count;
     auto const* positions = hb_buffer_get_glyph_positions(buffer, &glyph_count);

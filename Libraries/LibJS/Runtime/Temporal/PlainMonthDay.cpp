@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2021-2023, Linus Groh <linusg@serenityos.org>
  * Copyright (c) 2021, Luke Wilde <lukew@serenityos.org>
- * Copyright (c) 2024, Tim Flynn <trflynn89@ladybird.org>
+ * Copyright (c) 2024-2026, Tim Flynn <trflynn89@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -31,7 +31,7 @@ ThrowCompletionOr<GC::Ref<PlainMonthDay>> to_temporal_month_day(VM& vm, Value it
 {
     // 1. If options is not present, set options to undefined.
 
-    // 2. If item is a Object, then
+    // 2. If item is an Object, then
     if (item.is_object()) {
         auto const& object = item.as_object();
 
@@ -110,8 +110,8 @@ ThrowCompletionOr<GC::Ref<PlainMonthDay>> to_temporal_month_day(VM& vm, Value it
     // 13. Set result to ISODateToFields(calendar, isoDate, MONTH-DAY).
     auto result = iso_date_to_fields(calendar, iso_date, DateType::MonthDay);
 
-    // 14. NOTE: The following operation is called with CONSTRAIN regardless of the value of overflow, in order for the
-    //     calendar to store a canonical value in the [[Year]] field of the [[ISODate]] internal slot of the result.
+    // 14. NOTE: The following operation is called with CONSTRAIN regardless of overflow, in order for the calendar to
+    //     store a canonical value in the [[Year]] field of the [[ISODate]] internal slot of the result.
     // 15. Set isoDate to ? CalendarMonthDayFromFields(calendar, result, CONSTRAIN).
     iso_date = TRY(calendar_month_day_from_fields(vm, calendar, result, Overflow::Constrain));
 
@@ -149,7 +149,7 @@ String temporal_month_day_to_string(PlainMonthDay const& month_day, ShowCalendar
     // 3. Let result be the string-concatenation of month, the code unit 0x002D (HYPHEN-MINUS), and day.
     auto result = MUST(String::formatted("{:02}-{:02}", month_day.iso_date().month, month_day.iso_date().day));
 
-    // 4. If showCalendar is one of ALWAYS or CRITICAL, or if monthDay.[[Calendar]] is not "iso8601", then
+    // 4. If showCalendar is one of ALWAYS or CRITICAL, or monthDay.[[Calendar]] is not "iso8601", then
     if (show_calendar == ShowCalendar::Always || show_calendar == ShowCalendar::Critical || month_day.calendar() != "iso8601"sv) {
         // a. Let year be PadISOYear(monthDay.[[ISODate]].[[Year]]).
         auto year = pad_iso_year(month_day.iso_date().year);

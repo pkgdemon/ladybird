@@ -36,10 +36,11 @@ NonnullOwnPtr<Request> Request::fetch(
     ByteString method,
     NonnullRefPtr<HTTP::HeaderList> request_headers,
     ByteBuffer request_body,
+    HTTP::Cookie::IncludeCredentials include_credentials,
     ByteString alt_svc_cache_path,
     Core::ProxyData proxy_data)
 {
-    auto request = adopt_own(*new Request { request_id, Type::Fetch, disk_cache, cache_mode, client, curl_multi, resolver, move(url), move(method), move(request_headers), move(request_body), move(alt_svc_cache_path), proxy_data });
+    auto request = adopt_own(*new Request { request_id, Type::Fetch, disk_cache, cache_mode, client, curl_multi, resolver, move(url), move(method), move(request_headers), move(request_body), include_credentials, move(alt_svc_cache_path), proxy_data });
     request->process();
 
     return request;
@@ -77,10 +78,11 @@ NonnullOwnPtr<Request> Request::revalidate(
     ByteString method,
     NonnullRefPtr<HTTP::HeaderList> request_headers,
     ByteBuffer request_body,
+    HTTP::Cookie::IncludeCredentials include_credentials,
     ByteString alt_svc_cache_path,
     Core::ProxyData proxy_data)
 {
-    auto request = adopt_own(*new Request { request_id, Type::BackgroundRevalidation, disk_cache, HTTP::CacheMode::Default, client, curl_multi, resolver, move(url), move(method), move(request_headers), move(request_body), move(alt_svc_cache_path), proxy_data });
+    auto request = adopt_own(*new Request { request_id, Type::BackgroundRevalidation, disk_cache, HTTP::CacheMode::Default, client, curl_multi, resolver, move(url), move(method), move(request_headers), move(request_body), include_credentials, move(alt_svc_cache_path), proxy_data });
     request->process();
 
     return request;
@@ -98,6 +100,7 @@ Request::Request(
     ByteString method,
     NonnullRefPtr<HTTP::HeaderList> request_headers,
     ByteBuffer request_body,
+    HTTP::Cookie::IncludeCredentials include_credentials,
     ByteString alt_svc_cache_path,
     Core::ProxyData proxy_data)
     : m_request_id(request_id)
@@ -111,6 +114,7 @@ Request::Request(
     , m_method(move(method))
     , m_request_headers(move(request_headers))
     , m_request_body(move(request_body))
+    , m_include_credentials(include_credentials)
     , m_alt_svc_cache_path(move(alt_svc_cache_path))
     , m_proxy_data(proxy_data)
     , m_response_headers(HTTP::HeaderList::create())
@@ -149,8 +153,12 @@ Request::~Request()
     for (auto* string_list : m_curl_string_lists)
         curl_slist_free_all(string_list);
 
-    if (m_cache_entry_writer.has_value())
-        (void)m_cache_entry_writer->flush(m_request_headers, m_response_headers);
+    if (m_cache_entry_writer.has_value()) {
+        if (m_state == State::Complete)
+            (void)m_cache_entry_writer->flush(m_request_headers, m_response_headers);
+        else
+            m_cache_entry_writer->remove_incomplete_entry();
+    }
 }
 
 void Request::notify_request_unblocked(Badge<HTTP::DiskCache>)
@@ -158,6 +166,16 @@ void Request::notify_request_unblocked(Badge<HTTP::DiskCache>)
     // FIXME: We may want a timer to limit how long we are waiting for a request before proceeding with a network
     //        request that skips the disk cache.
     transition_to_state(State::Init);
+}
+
+void Request::notify_retrieved_http_cookie(Badge<ConnectionFromClient>, StringView cookie)
+{
+    if (!cookie.is_empty()) {
+        auto header = HTTP::Header::isomorphic_encode("Cookie"sv, cookie);
+        m_request_headers->append(move(header));
+    }
+
+    transition_to_state(State::Fetch);
 }
 
 void Request::notify_fetch_complete(Badge<ConnectionFromClient>, int result_code)
@@ -203,11 +221,17 @@ void Request::process()
     case State::WaitForCache:
         // Do nothing; we are waiting for the disk cache to notify us to proceed.
         break;
+    case State::FailedCacheOnly:
+        handle_failed_cache_only_state();
+        break;
     case State::ServeSubstitution:
         handle_serve_substitution_state();
         break;
     case State::DNSLookup:
         handle_dns_lookup_state();
+        break;
+    case State::RetrieveCookie:
+        handle_retrieve_cookie_state();
         break;
     case State::Connect:
         handle_connect_state();
@@ -248,7 +272,7 @@ void Request::handle_initial_state()
 
                     if (m_cache_entry_reader.has_value()) {
                         if (m_cache_entry_reader->revalidation_type() == HTTP::CacheEntryReader::RevalidationType::StaleWhileRevalidate)
-                            m_client.start_revalidation_request({}, m_method, m_url, m_request_headers, m_request_body, m_proxy_data);
+                            m_client.start_revalidation_request({}, m_method, m_url, m_request_headers, m_request_body, m_include_credentials, m_proxy_data);
 
                         if (is_revalidation_request())
                             transition_to_state(State::DNSLookup);
@@ -268,8 +292,8 @@ void Request::handle_initial_state()
         if (m_state != State::Init)
             return;
 
-        if (m_cache_mode == HTTP::CacheMode::OnlyIfCached) {
-            transition_to_state(State::Error);
+        if (is_cache_only_request()) {
+            transition_to_state(State::FailedCacheOnly);
             return;
         }
 
@@ -297,6 +321,7 @@ void Request::handle_initial_state()
 
 void Request::handle_read_cache_state()
 {
+    m_status_code = m_cache_entry_reader->status_code();
     m_reason_phrase = m_cache_entry_reader->reason_phrase();
     m_response_headers = m_cache_entry_reader->response_headers();
     m_cache_status = CacheStatus::ReadFromCache;
@@ -319,6 +344,35 @@ void Request::handle_read_cache_state()
 
             transition_to_state(State::Error);
         });
+}
+
+void Request::handle_failed_cache_only_state()
+{
+    if (m_cache_mode == HTTP::CacheMode::OnlyIfCached) {
+        // NB: Contrary to the HTTP Caching RFC, the Fetch API expects a network error. See:
+        // https://github.com/web-platform-tests/wpt/issues/8032
+        transition_to_state(State::Error);
+        return;
+    }
+
+    // https://httpwg.org/specs/rfc9111.html#cache-request-directive.only-if-cached
+    // The only-if-cached request directive indicates that the client only wishes to obtain a stored response. Caches
+    // that honor this request directive SHOULD, upon receiving it, respond with either a stored response consistent
+    // with the other constraints of the request or a 504 (Gateway Timeout) status code.
+    m_status_code = 504;
+    m_reason_phrase = MUST(String::from_utf8(HTTP::reason_phrase_for_code(*m_status_code)));
+
+    // NB: There is a privacy concern around allowing any origin to determine the cache state of other origins using
+    //     this Cache-Control directive. The Fetch API will prevent { cache: "only-if-cached" } requests that do not
+    //     pass a same-origin test. We mimic this here with the Access-Control-Allow-Origin response header.
+    m_response_headers->set({ "Access-Control-Allow-Origin"sv, m_url.origin().serialize().to_byte_string() });
+
+    if (inform_client_request_started().is_error())
+        return;
+    transfer_headers_to_client_if_needed();
+
+    m_curl_result_code = CURLE_OK;
+    transition_to_state(State::Complete);
 }
 
 void Request::handle_serve_substitution_state()
@@ -345,7 +399,7 @@ void Request::handle_serve_substitution_state()
     }
 
     m_status_code = substitution->status_code;
-    m_reason_phrase = MUST(String::from_utf8(HTTP::reason_phrase_for_code(m_status_code)));
+    m_reason_phrase = MUST(String::from_utf8(HTTP::reason_phrase_for_code(*m_status_code)));
 
     // Determine content type: use override if provided, otherwise guess from filename.
     StringView content_type;
@@ -356,6 +410,7 @@ void Request::handle_serve_substitution_state()
 
     m_response_headers->append({ "Content-Type"sv, ByteString { content_type } });
     m_response_headers->append({ "Content-Length"sv, ByteString::number(content.value().size()) });
+    m_response_headers->append({ "Access-Control-Allow-Origin"sv, "*"sv });
 
     if (inform_client_request_started().is_error())
         return;
@@ -393,11 +448,26 @@ void Request::handle_dns_lookup_state()
                 transition_to_state(State::Error);
             } else if (m_type == Type::Fetch || m_type == Type::BackgroundRevalidation) {
                 m_dns_result = move(dns_result);
-                transition_to_state(State::Fetch);
+                transition_to_state(State::RetrieveCookie);
             } else {
                 transition_to_state(State::Complete);
             }
         });
+}
+
+void Request::handle_retrieve_cookie_state()
+{
+    if (m_include_credentials == HTTP::Cookie::IncludeCredentials::No) {
+        transition_to_state(State::Fetch);
+        return;
+    }
+
+    if (auto connection = ConnectionFromClient::primary_connection(); connection.has_value()) {
+        connection->async_retrieve_http_cookie(m_client.client_id(), m_request_id, m_url);
+    } else {
+        m_network_error = Requests::NetworkError::RequestServerDied;
+        transition_to_state(State::Error);
+    }
 }
 
 void Request::handle_connect_state()
@@ -414,6 +484,9 @@ void Request::handle_connect_state()
     };
 
     set_option(CURLOPT_PRIVATE, this);
+
+    set_option(CURLOPT_NOSIGNAL, 1L);
+
     set_option(CURLOPT_URL, m_url.to_byte_string().characters());
     set_option(CURLOPT_PORT, m_url.port_or_default());
     set_option(CURLOPT_CONNECTTIMEOUT, s_connect_timeout_seconds);
@@ -447,6 +520,8 @@ void Request::handle_fetch_state()
     };
 
     set_option(CURLOPT_PRIVATE, this);
+
+    set_option(CURLOPT_NOSIGNAL, 1L);
 
     if (auto const& path = default_certificate_path(); !path.is_empty())
         set_option(CURLOPT_CAINFO, path.characters());
@@ -502,14 +577,13 @@ void Request::handle_fetch_state()
         VERIFY(revalidation_attributes.etag.has_value() || revalidation_attributes.last_modified.has_value());
 
         if (revalidation_attributes.etag.has_value()) {
-            // There is no CURLOPT for If-None-Match, so we must set the header value directly.
             auto header_string = ByteString::formatted("If-None-Match: {}", *revalidation_attributes.etag);
             curl_headers = curl_slist_append(curl_headers, header_string.characters());
         }
 
         if (revalidation_attributes.last_modified.has_value()) {
-            set_option(CURLOPT_TIMECONDITION, CURL_TIMECOND_IFMODSINCE);
-            set_option(CURLOPT_TIMEVALUE, revalidation_attributes.last_modified->seconds_since_epoch());
+            auto header_string = ByteString::formatted("If-Modified-Since: {}", *revalidation_attributes.last_modified);
+            curl_headers = curl_slist_append(curl_headers, header_string.characters());
         }
     }
 
@@ -564,10 +638,8 @@ void Request::handle_complete_state()
                 dbgln("Request::handle_complete_state: Unable to map error ({}): \"\033[31;1m{}\033[0m\"", *m_curl_result_code, curl_error_message);
             }
 
-            if (m_cache_entry_writer.has_value()) {
-                m_cache_entry_writer->on_network_error();
-                m_cache_entry_writer.clear();
-            }
+            transition_to_state(State::Error);
+            return;
         }
 
         m_client.async_request_finished(m_request_id, m_bytes_transferred_to_client, timing_info, m_network_error);
@@ -683,15 +755,11 @@ void Request::transfer_headers_to_client_if_needed()
         return;
 
     // m_status_code may already be set (e.g. from a resource substitution).
-    if (m_status_code == 0) {
-        if (m_cache_entry_reader.has_value())
-            m_status_code = m_cache_entry_reader->status_code();
-        else
-            m_status_code = acquire_status_code();
-    }
+    if (!m_status_code.has_value())
+        m_status_code = acquire_status_code();
 
     if (m_cache_entry_writer.has_value()) {
-        if (m_cache_entry_writer->write_status_and_reason(m_status_code, m_reason_phrase, m_request_headers, m_response_headers).is_error()) {
+        if (m_cache_entry_writer->write_status_and_reason(*m_status_code, m_reason_phrase, m_request_headers, m_response_headers).is_error()) {
             m_cache_status = CacheStatus::NotCached;
             m_cache_entry_writer.clear();
         } else {
@@ -801,6 +869,15 @@ ErrorOr<void> Request::revalidation_failed()
 
     TRY(inform_client_request_started());
     return {};
+}
+
+bool Request::is_cache_only_request() const
+{
+    if (m_cache_mode == HTTP::CacheMode::OnlyIfCached)
+        return true;
+
+    auto cache_control = m_request_headers->get("Cache-Control"sv);
+    return cache_control.has_value() && cache_control->contains("only-if-cached"sv, CaseSensitivity::CaseInsensitive);
 }
 
 u32 Request::acquire_status_code() const

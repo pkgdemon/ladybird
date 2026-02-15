@@ -22,6 +22,7 @@ set(SOURCES
     Animations/DocumentTimeline.cpp
     Animations/KeyframeEffect.cpp
     Animations/PseudoElementParsing.cpp
+    Animations/ScrollTimeline.cpp
     ARIA/AriaData.cpp
     ARIA/ARIAMixin.cpp
     ARIA/AttributeNames.cpp
@@ -81,8 +82,6 @@ set(SOURCES
     ContentSecurityPolicy/SecurityPolicyViolationEvent.cpp
     ContentSecurityPolicy/SerializedPolicy.cpp
     ContentSecurityPolicy/Violation.cpp
-    Cookie/Cookie.cpp
-    Cookie/ParsedCookie.cpp
     CookieStore/CookieChangeEvent.cpp
     CookieStore/CookieStore.cpp
     CredentialManagement/Credential.cpp
@@ -104,6 +103,7 @@ set(SOURCES
     CSS/CascadedProperties.cpp
     CSS/Clip.cpp
     CSS/ComputedProperties.cpp
+    CSS/CustomPropertyData.cpp
     CSS/CountersSet.cpp
     CSS/CSS.cpp
     CSS/CSSAnimation.cpp
@@ -169,6 +169,7 @@ set(SOURCES
     CSS/FontFace.cpp
     CSS/FontFaceSet.cpp
     CSS/FontFaceSetLoadEvent.cpp
+    CSS/FontFeatureData.cpp
     CSS/Frequency.cpp
     CSS/GridTrackPlacement.cpp
     CSS/GridTrackSize.cpp
@@ -242,7 +243,9 @@ set(SOURCES
     CSS/StyleValues/ConicGradientStyleValue.cpp
     CSS/StyleValues/ContentStyleValue.cpp
     CSS/StyleValues/CounterDefinitionsStyleValue.cpp
+    CSS/StyleValues/CounterStyleSystemStyleValue.cpp
     CSS/StyleValues/CounterStyleValue.cpp
+    CSS/StyleValues/CounterStyleStyleValue.cpp
     CSS/StyleValues/CursorStyleValue.cpp
     CSS/StyleValues/CustomIdentStyleValue.cpp
     CSS/StyleValues/DimensionStyleValue.cpp
@@ -344,10 +347,11 @@ set(SOURCES
     DOM/Range.cpp
     DOM/ShadowRoot.cpp
     DOM/Slot.cpp
+    DOM/SlotRegistry.cpp
     DOM/Slottable.cpp
     DOM/StaticNodeList.cpp
     DOM/StaticRange.cpp
-    DOM/StyleElementUtils.cpp
+    DOM/StyleElementBase.cpp
     DOM/StyleInvalidator.cpp
     DOM/Text.cpp
     DOM/TreeWalker.cpp
@@ -434,7 +438,7 @@ set(SOURCES
     HighResolutionTime/Performance.cpp
     HighResolutionTime/TimeOrigin.cpp
     HTML/AbstractWorker.cpp
-    HTML/AnimatedBitmapDecodedImageData.cpp
+    HTML/BitmapDecodedImageData.cpp
     HTML/AnimationFrameCallbackDriver.cpp
     HTML/AttributeNames.cpp
     HTML/AudioTrack.cpp
@@ -651,6 +655,7 @@ set(SOURCES
     HTML/SessionHistoryTraversalQueue.cpp
     HTML/ShadowRealmGlobalScope.cpp
     HTML/SharedResourceRequest.cpp
+    HTML/AnimatedDecodedImageData.cpp
     HTML/SharedWorker.cpp
     HTML/SharedWorkerGlobalScope.cpp
     HTML/SourceSet.cpp
@@ -739,7 +744,6 @@ set(SOURCES
     Layout/InlineFormattingContext.cpp
     Layout/InlineLevelIterator.cpp
     Layout/InlineNode.cpp
-    Layout/Label.cpp
     Layout/LabelableNode.cpp
     Layout/LayoutState.cpp
     Layout/LegendBox.cpp
@@ -766,6 +770,8 @@ set(SOURCES
     Layout/TableFormattingContext.cpp
     Layout/TableGrid.cpp
     Layout/TableWrapper.cpp
+    Layout/TextAreaBox.cpp
+    Layout/TextInputBox.cpp
     Layout/TextNode.cpp
     Layout/TreeBuilder.cpp
     Layout/VideoBox.cpp
@@ -797,6 +803,7 @@ set(SOURCES
     NavigationTiming/PerformanceNavigation.cpp
     NavigationTiming/PerformanceTiming.cpp
     NotificationsAPI/Notification.cpp
+    Page/AutoScrollHandler.cpp
     Page/DragAndDropEventHandler.cpp
     Page/ElementResizeAction.cpp
     Page/EventHandler.cpp
@@ -928,6 +935,7 @@ set(SOURCES
     SVG/Path.cpp
     SVG/SVGAElement.cpp
     SVG/SVGAnimatedEnumeration.cpp
+    SVG/SVGAnimatedInteger.cpp
     SVG/SVGAnimatedLength.cpp
     SVG/SVGAnimatedLengthList.cpp
     SVG/SVGAnimatedNumber.cpp
@@ -960,6 +968,7 @@ set(SOURCES
     SVG/SVGFEMergeNodeElement.cpp
     SVG/SVGFEMorphologyElement.cpp
     SVG/SVGFEOffsetElement.cpp
+    SVG/SVGFETurbulenceElement.cpp
     SVG/SVGFilterElement.cpp
     SVG/SVGFilterPrimitiveStandardAttributes.cpp
     SVG/SVGFitToViewBox.cpp
@@ -1077,6 +1086,7 @@ set(SOURCES
     WebGL/Extensions/EXTRenderSnorm.cpp
     WebGL/Extensions/EXTTextureFilterAnisotropic.cpp
     WebGL/Extensions/EXTTextureNorm16.cpp
+    WebGL/Extensions/OESElementIndexUint.cpp
     WebGL/Extensions/OESStandardDerivatives.cpp
     WebGL/Extensions/OESVertexArrayObject.cpp
     WebGL/Extensions/WebGLCompressedTextureS3tc.cpp
@@ -1121,6 +1131,8 @@ set(SOURCES
     WebSockets/WebSocket.cpp
     WebVTT/VTTCue.cpp
     WebVTT/VTTRegion.cpp
+    WebXR/XRSession.cpp
+    WebXR/XRSessionEvent.cpp
     WebXR/XRSystem.cpp
     Worker/WebWorkerClient.cpp
     XHR/EventNames.cpp

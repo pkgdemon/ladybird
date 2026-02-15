@@ -13,6 +13,8 @@
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOMURL/DOMURL.h>
 #include <LibWeb/Fetch/Infrastructure/FetchRecord.h>
+#include <LibWeb/HTML/BrowsingContext.h>
+#include <LibWeb/HTML/PolicyContainers.h>
 #include <LibWeb/HTML/Scripting/Agent.h>
 #include <LibWeb/HTML/Scripting/Environments.h>
 #include <LibWeb/HTML/Scripting/ExceptionReporter.h>
@@ -40,7 +42,7 @@ void Environment::visit_edges(Cell::Visitor& visitor)
 EnvironmentSettingsObject::EnvironmentSettingsObject(NonnullOwnPtr<JS::ExecutionContext> realm_execution_context)
     : m_realm_execution_context(move(realm_execution_context))
 {
-    m_realm_execution_context->ensure_rare_data()->context_owner = this;
+    m_realm_execution_context->context_owner = this;
 
     // Register with the responsible event loop so we can perform step 4 of "perform a microtask checkpoint".
     responsible_event_loop().register_environment_settings_object({}, *this);
@@ -554,6 +556,8 @@ bool is_secure_context(Environment const& environment)
         if (is<WorkerGlobalScope>(global)) {
             // FIXME: 1. If global's owner set[0]'s relevant settings object is a secure context, then return true.
             // NOTE: We only need to check the 0th item since they will necessarily all be consistent.
+            if (true)
+                return true;
 
             // 2. Return false.
             return false;

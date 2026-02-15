@@ -2,9 +2,9 @@
  * Copyright (c) 2018-2025, Andreas Kling <andreas@ladybird.org>
  * Copyright (c) 2022, Adam Hodgen <ant1441@gmail.com>
  * Copyright (c) 2022, Andrew Kaster <akaster@serenityos.org>
- * Copyright (c) 2023-2025, Shannon Booth <shannon@serenityos.org>
+ * Copyright (c) 2023-2026, Shannon Booth <shannon@serenityos.org>
  * Copyright (c) 2023, Bastiaan van der Plaat <bastiaan.v.d.plaat@gmail.com>
- * Copyright (c) 2024, Jelle Raaijmakers <jelle@ladybird.org>
+ * Copyright (c) 2024-2026, Jelle Raaijmakers <jelle@ladybird.org>
  * Copyright (c) 2024, Fernando Kiotheka <fer@k6a.dev>
  * Copyright (c) 2025, Felipe Muñoz Mazur <felipe.munoz.mazur@protonmail.com>
  * Copyright (c) 2025, Glenn Skrzypczak <glenn.skrzypczak@gmail.com>
@@ -19,6 +19,7 @@
 #include <LibURL/Parser.h>
 #include <LibWeb/Bindings/HTMLInputElementPrototype.h>
 #include <LibWeb/Bindings/PrincipalHostDefined.h>
+#include <LibWeb/CSS/CSSStyleProperties.h>
 #include <LibWeb/CSS/ComputedProperties.h>
 #include <LibWeb/CSS/Parser/Parser.h>
 #include <LibWeb/CSS/StyleValues/DisplayStyleValue.h>
@@ -35,7 +36,6 @@
 #include <LibWeb/HTML/DecodedImageData.h>
 #include <LibWeb/HTML/EventNames.h>
 #include <LibWeb/HTML/HTMLDataListElement.h>
-#include <LibWeb/HTML/HTMLDivElement.h>
 #include <LibWeb/HTML/HTMLFormElement.h>
 #include <LibWeb/HTML/HTMLInputElement.h>
 #include <LibWeb/HTML/Numbers.h>
@@ -45,11 +45,11 @@
 #include <LibWeb/HTML/SharedResourceRequest.h>
 #include <LibWeb/HTML/Window.h>
 #include <LibWeb/Infra/CharacterTypes.h>
-#include <LibWeb/Infra/Strings.h>
 #include <LibWeb/Layout/BlockContainer.h>
 #include <LibWeb/Layout/CheckBox.h>
 #include <LibWeb/Layout/ImageBox.h>
 #include <LibWeb/Layout/RadioButton.h>
+#include <LibWeb/Layout/TextInputBox.h>
 #include <LibWeb/MimeSniff/MimeType.h>
 #include <LibWeb/MimeSniff/Resource.h>
 #include <LibWeb/Namespace.h>
@@ -57,6 +57,7 @@
 #include <LibWeb/Painting/PaintableBox.h>
 #include <LibWeb/Selection/Selection.h>
 #include <LibWeb/UIEvents/EventNames.h>
+#include <LibWeb/UIEvents/InputEvent.h>
 #include <LibWeb/UIEvents/MouseEvent.h>
 #include <LibWeb/WebIDL/DOMException.h>
 #include <LibWeb/WebIDL/ExceptionOr.h>
@@ -137,16 +138,28 @@ GC::Ptr<Layout::Node> HTMLInputElement::create_layout_node(GC::Ref<CSS::Computed
         return Element::create_layout_node_for_display_type(document(), style->display(), style, this);
     }
 
-    if (type_state() == TypeAttributeState::SubmitButton || type_state() == TypeAttributeState::Button || type_state() == TypeAttributeState::ResetButton)
+    switch (type_state()) {
+
+    case TypeAttributeState::SubmitButton:
+    case TypeAttributeState::Button:
+    case TypeAttributeState::ResetButton:
         return heap().allocate<Layout::BlockContainer>(document(), this, move(style));
-
-    if (type_state() == TypeAttributeState::Checkbox)
+    case TypeAttributeState::Checkbox:
         return heap().allocate<Layout::CheckBox>(document(), *this, move(style));
-
-    if (type_state() == TypeAttributeState::RadioButton)
+    case TypeAttributeState::RadioButton:
         return heap().allocate<Layout::RadioButton>(document(), *this, move(style));
-
-    return Element::create_layout_node_for_display_type(document(), style->display(), style, this);
+    case TypeAttributeState::Text:
+    case TypeAttributeState::Search:
+    case TypeAttributeState::URL:
+    case TypeAttributeState::Telephone:
+    case TypeAttributeState::Email:
+    case TypeAttributeState::Password:
+    case TypeAttributeState::Number:
+        // FIXME: text padding issues
+        return heap().allocate<Layout::TextInputBox>(document(), *this, move(style));
+    default:
+        return Element::create_layout_node_for_display_type(document(), style->display(), style, this);
+    }
 }
 
 void HTMLInputElement::adjust_computed_style(CSS::ComputedProperties& style)
@@ -320,12 +333,12 @@ FileFilter HTMLInputElement::parse_accept_attribute() const
 
         // The string "video/*"
         //     Indicates that video files are accepted.
-        if (value.equals_ignoring_ascii_case("video/*"sv))
+        else if (value.equals_ignoring_ascii_case("video/*"sv))
             filter.add_filter(FileFilter::FileType::Video);
 
         // The string "image/*"
         //     Indicates that image files are accepted.
-        if (value.equals_ignoring_ascii_case("image/*"sv))
+        else if (value.equals_ignoring_ascii_case("image/*"sv))
             filter.add_filter(FileFilter::FileType::Image);
 
         // A valid MIME type string with no parameters
@@ -548,7 +561,7 @@ WebIDL::ExceptionOr<void> HTMLInputElement::run_input_activation_behavior(DOM::E
     return {};
 }
 
-void HTMLInputElement::did_edit_text_node()
+void HTMLInputElement::did_edit_text_node(FlyString const& input_type, Optional<Utf16String> const& data)
 {
     // An input element's dirty value flag must be set to true whenever the user interacts with the control in a way that changes the value.
     auto old_value = move(m_value);
@@ -562,7 +575,7 @@ void HTMLInputElement::did_edit_text_node()
 
     update_placeholder_visibility();
 
-    user_interaction_did_change_input_value();
+    user_interaction_did_change_input_value(input_type, data);
 }
 
 void HTMLInputElement::did_pick_color(Optional<Color> picked_color, ColorPickerUpdateState state)
@@ -794,6 +807,8 @@ static GC::Ref<CSS::CSSStyleProperties> inner_text_style_when_visible()
                 width: 100%;
                 height: 1lh;
                 align-items: center;
+                overflow: auto;
+                scrollbar-width: none;
                 text-overflow: clip;
                 white-space: nowrap;
             )~~~"sv);
@@ -1087,6 +1102,7 @@ void HTMLInputElement::update_shadow_tree()
 void HTMLInputElement::create_button_input_shadow_tree()
 {
     auto shadow_root = realm().create<DOM::ShadowRoot>(document(), *this, Bindings::ShadowRootMode::Closed);
+    shadow_root->set_user_agent_internal(true);
     set_shadow_root(shadow_root);
     auto text_container = MUST(DOM::create_element(document(), HTML::TagNames::span, Namespace::HTML));
     text_container->set_attribute_value(HTML::AttributeNames::style, "display: inline-block; pointer-events: none;"_string);
@@ -1099,6 +1115,7 @@ void HTMLInputElement::create_button_input_shadow_tree()
 void HTMLInputElement::create_text_input_shadow_tree()
 {
     auto shadow_root = realm().create<DOM::ShadowRoot>(document(), *this, Bindings::ShadowRootMode::Closed);
+    shadow_root->set_user_agent_internal(true);
     set_shadow_root(shadow_root);
 
     auto element = MUST(DOM::create_element(document(), HTML::TagNames::div, Namespace::HTML));
@@ -1129,6 +1146,8 @@ void HTMLInputElement::create_text_input_shadow_tree()
                 width: 100%;
                 height: 1lh;
                 align-items: center;
+                overflow: auto;
+                scrollbar-width: none;
                 text-overflow: clip;
                 white-space: nowrap;
             )~~~"sv);
@@ -1226,6 +1245,7 @@ void HTMLInputElement::create_text_input_shadow_tree()
 void HTMLInputElement::create_color_input_shadow_tree()
 {
     auto shadow_root = realm().create<DOM::ShadowRoot>(document(), *this, Bindings::ShadowRootMode::Closed);
+    shadow_root->set_user_agent_internal(true);
 
     auto color = value_sanitization_algorithm(m_value);
 
@@ -1265,6 +1285,7 @@ void HTMLInputElement::create_file_input_shadow_tree()
     auto& realm = this->realm();
 
     auto shadow_root = realm.create<DOM::ShadowRoot>(document(), *this, Bindings::ShadowRootMode::Closed);
+    shadow_root->set_user_agent_internal(true);
 
     m_file_button = DOM::create_element(document(), HTML::TagNames::button, Namespace::HTML).release_value_but_fixme_should_propagate_errors();
     m_file_button->set_use_pseudo_element(CSS::PseudoElement::FileSelectorButton);
@@ -1310,6 +1331,7 @@ void HTMLInputElement::update_file_input_shadow_tree()
 void HTMLInputElement::create_range_input_shadow_tree()
 {
     auto shadow_root = realm().create<DOM::ShadowRoot>(document(), *this, Bindings::ShadowRootMode::Closed);
+    shadow_root->set_user_agent_internal(true);
     set_shadow_root(shadow_root);
 
     m_slider_runnable_track = MUST(DOM::create_element(document(), HTML::TagNames::div, Namespace::HTML));
@@ -1406,18 +1428,21 @@ void HTMLInputElement::create_range_input_shadow_tree()
     add_event_listener_without_options(UIEvents::EventNames::mousedown, DOM::IDLEventListener::create(realm(), mousedown_callback));
 }
 
-void HTMLInputElement::user_interaction_did_change_input_value()
+void HTMLInputElement::user_interaction_did_change_input_value(FlyString const& input_type, Optional<Utf16String> const& data)
 {
     // https://html.spec.whatwg.org/multipage/input.html#common-input-element-events
     // For input elements without a defined input activation behavior, but to which these events apply,
     // and for which the user interface involves both interactive manipulation and an explicit commit action,
     // then when the user changes the element's value, the user agent must queue an element task on the user interaction task source
     // given the input element to fire an event named input at the input element, with the bubbles and composed attributes initialized to true
-    queue_an_element_task(HTML::Task::Source::UserInteraction, [this] {
-        // FIXME: If a string was added to this input, this input event's .data should be set to it.
-        auto input_event = DOM::Event::create(realm(), HTML::EventNames::input);
-        input_event->set_bubbles(true);
-        input_event->set_composed(true);
+    queue_an_element_task(HTML::Task::Source::UserInteraction, [this, input_type, data] {
+        // https://w3c.github.io/uievents/#event-type-input
+        UIEvents::InputEventInit input_event_init;
+        input_event_init.bubbles = true;
+        input_event_init.composed = true;
+        input_event_init.input_type = input_type;
+        input_event_init.data = data;
+        auto input_event = UIEvents::InputEvent::create_from_platform_event(realm(), HTML::EventNames::input, input_event_init);
         dispatch_event(*input_event);
     });
     // and any time the user commits the change, the user agent must queue an element task on the user interaction task source given the input
@@ -1448,8 +1473,12 @@ void HTMLInputElement::did_receive_focus()
     if (m_placeholder_text_node)
         m_placeholder_text_node->invalidate_style(DOM::StyleInvalidationReason::DidReceiveFocus);
 
-    if (has_selectable_text())
-        document().get_selection()->remove_all_ranges();
+    if (has_selectable_text()) {
+        if (document().last_focus_trigger() == FocusTrigger::Key)
+            MUST(select());
+        else
+            document().get_selection()->remove_all_ranges();
+    }
 }
 
 void HTMLInputElement::did_lose_focus()
@@ -1533,6 +1562,16 @@ void HTMLInputElement::type_attribute_changed(TypeAttributeState old_state, Type
 {
     auto new_value_attribute_mode = value_attribute_mode_for_type_state(new_state);
     auto old_value_attribute_mode = value_attribute_mode_for_type_state(old_state);
+
+    if (checked_applies(old_state) != checked_applies(new_state)) {
+        invalidate_style(
+            DOM::StyleInvalidationReason::HTMLInputElementSetType,
+            {
+                { .type = CSS::InvalidationSet::Property::Type::PseudoClass, .value = CSS::PseudoClass::Checked },
+                { .type = CSS::InvalidationSet::Property::Type::PseudoClass, .value = CSS::PseudoClass::Unchecked },
+            },
+            {});
+    }
 
     // 1. If the previous state of the element's type attribute put the value IDL attribute in the value mode, and the element's
     //    value is not the empty string, and the new state of the element's type attribute puts the value IDL attribute in either
@@ -2014,6 +2053,8 @@ bool HTMLInputElement::is_presentational_hint(FlyString const& name) const
 
 void HTMLInputElement::apply_presentational_hints(GC::Ref<CSS::CascadedProperties> cascaded_properties) const
 {
+    Base::apply_presentational_hints(cascaded_properties);
+
     if (type_state() != TypeAttributeState::ImageButton)
         return;
 
@@ -3273,15 +3314,20 @@ bool HTMLInputElement::required_applies() const
 }
 
 // https://html.spec.whatwg.org/multipage/input.html#do-not-apply
-bool HTMLInputElement::checked_applies() const
+bool HTMLInputElement::checked_applies(TypeAttributeState type_state)
 {
-    switch (type_state()) {
+    switch (type_state) {
     case TypeAttributeState::Checkbox:
     case TypeAttributeState::RadioButton:
         return true;
     default:
         return false;
     }
+}
+
+bool HTMLInputElement::checked_applies() const
+{
+    return checked_applies(type_state());
 }
 
 bool HTMLInputElement::has_selectable_text() const

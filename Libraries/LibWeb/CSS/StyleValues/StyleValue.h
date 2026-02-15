@@ -16,6 +16,7 @@
 #include <AK/String.h>
 #include <AK/StringBuilder.h>
 #include <AK/StringView.h>
+#include <AK/ValueComparingRefPtr.h>
 #include <AK/Vector.h>
 #include <AK/WeakPtr.h>
 #include <LibGfx/Color.h>
@@ -47,7 +48,9 @@ namespace Web::CSS {
     __ENUMERATE_CSS_STYLE_VALUE_TYPE(ConicGradient, conic_gradient, ConicGradientStyleValue)                          \
     __ENUMERATE_CSS_STYLE_VALUE_TYPE(Content, content, ContentStyleValue)                                             \
     __ENUMERATE_CSS_STYLE_VALUE_TYPE(Counter, counter, CounterStyleValue)                                             \
+    __ENUMERATE_CSS_STYLE_VALUE_TYPE(CounterStyle, counter_style, CounterStyleStyleValue)                             \
     __ENUMERATE_CSS_STYLE_VALUE_TYPE(CounterDefinitions, counter_definitions, CounterDefinitionsStyleValue)           \
+    __ENUMERATE_CSS_STYLE_VALUE_TYPE(CounterStyleSystem, counter_style_system, CounterStyleSystemStyleValue)          \
     __ENUMERATE_CSS_STYLE_VALUE_TYPE(Cursor, cursor, CursorStyleValue)                                                \
     __ENUMERATE_CSS_STYLE_VALUE_TYPE(CustomIdent, custom_ident, CustomIdentStyleValue)                                \
     __ENUMERATE_CSS_STYLE_VALUE_TYPE(Display, display, DisplayStyleValue)                                             \
@@ -99,61 +102,10 @@ namespace Web::CSS {
     __ENUMERATE_CSS_STYLE_VALUE_TYPE(ValueList, value_list, StyleValueList)                                           \
     __ENUMERATE_CSS_STYLE_VALUE_TYPE(ViewFunction, view_function, ViewFunctionStyleValue)
 
-template<typename T>
-struct ValueComparingNonnullRefPtr : public NonnullRefPtr<T> {
-    using NonnullRefPtr<T>::NonnullRefPtr;
-
-    ValueComparingNonnullRefPtr(NonnullRefPtr<T> const& other)
-        : NonnullRefPtr<T>(other)
-    {
-    }
-
-    ValueComparingNonnullRefPtr(NonnullRefPtr<T>&& other)
-        : NonnullRefPtr<T>(move(other))
-    {
-    }
-
-    bool operator==(ValueComparingNonnullRefPtr const& other) const
-    {
-        return this->ptr() == other.ptr() || this->ptr()->equals(*other);
-    }
-
-private:
-    using NonnullRefPtr<T>::operator==;
-};
-
-template<typename T>
-struct ValueComparingRefPtr : public RefPtr<T> {
-    using RefPtr<T>::RefPtr;
-
-    ValueComparingRefPtr(RefPtr<T> const& other)
-        : RefPtr<T>(other)
-    {
-    }
-
-    ValueComparingRefPtr(RefPtr<T>&& other)
-        : RefPtr<T>(move(other))
-    {
-    }
-
-    template<typename U>
-    bool operator==(ValueComparingNonnullRefPtr<U> const& other) const
-    {
-        return this->ptr() == other.ptr() || (this->ptr() && this->ptr()->equals(*other));
-    }
-
-    bool operator==(ValueComparingRefPtr const& other) const
-    {
-        return this->ptr() == other.ptr() || (this->ptr() && other.ptr() && this->ptr()->equals(*other));
-    }
-
-private:
-    using RefPtr<T>::operator==;
-};
-
 struct ColorResolutionContext {
     Optional<PreferredColorScheme> color_scheme;
     Optional<Color> current_color;
+    Optional<Color> accent_color;
     GC::Ptr<DOM::Document const> document;
     CalculationResolutionContext calculation_resolution_context;
 

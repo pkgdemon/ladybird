@@ -24,6 +24,7 @@
 #include <LibWeb/Geometry/DOMRect.h>
 #include <LibWeb/Geometry/DOMRectList.h>
 #include <LibWeb/HTML/HTMLHtmlElement.h>
+#include <LibWeb/HTML/HTMLScriptElement.h>
 #include <LibWeb/HTML/Window.h>
 #include <LibWeb/Namespace.h>
 #include <LibWeb/Painting/ViewportPaintable.h>
@@ -77,8 +78,11 @@ Range::Range(GC::Ref<Node> start_container, WebIDL::UnsignedLong start_offset, G
     live_ranges().set(this);
 }
 
-Range::~Range()
+Range::~Range() = default;
+
+void Range::finalize()
 {
+    Base::finalize();
     live_ranges().remove(this);
 }
 

@@ -202,11 +202,17 @@
     "lower-greek",
     "lower-latin",
     "lower-roman",
-    "none",
     "square",
     "upper-alpha",
     "upper-latin",
     "upper-roman"
+  ],
+  "counter-style-system": [
+    "cyclic",
+    "numeric",
+    "alphabetic",
+    "symbolic",
+    "additive"
   ],
   "cross-origin-modifier-value": [
     "anonymous",
@@ -335,6 +341,10 @@
   "font-kerning": [
     "auto",
     "normal",
+    "none"
+  ],
+  "font-optical-sizing": [
+    "auto",
     "none"
   ],
   "font-style-keyword": [

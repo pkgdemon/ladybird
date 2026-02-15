@@ -10,7 +10,6 @@
 #include <AK/FlyString.h>
 #include <AK/HashMap.h>
 #include <AK/Optional.h>
-#include <LibGfx/Font/FontVariant.h>
 #include <LibGfx/FontCascadeList.h>
 #include <LibGfx/ScalingMode.h>
 #include <LibWeb/CSS/CalculatedOr.h>
@@ -144,14 +143,13 @@ private:
 
 using CursorData = Variant<NonnullRefPtr<CursorStyleValue const>, CursorPredefined>;
 
-using ListStyleType = Variant<CounterStyleNameKeyword, String>;
+using ListStyleType = Variant<Empty, CounterStyleNameKeyword, String>;
 
 class InitialValues {
 public:
     static AspectRatio aspect_ratio() { return AspectRatio { true, {} }; }
     static CSSPixels font_size() { return 16; }
     static double font_weight() { return 400; }
-    static Gfx::ShapeFeatures font_features() { return {}; }
     static CSSPixels line_height() { return 0; }
     static Float float_() { return Float::None; }
     static Length border_spacing() { return Length::make_px(0); }
@@ -225,6 +223,7 @@ public:
     static LengthBox inset() { return {}; }
     static LengthBox margin() { return { Length::make_px(0), Length::make_px(0), Length::make_px(0), Length::make_px(0) }; }
     static LengthBox padding() { return { Length::make_px(0), Length::make_px(0), Length::make_px(0), Length::make_px(0) }; }
+    static LengthBox overflow_clip_margin() { return { Length::make_px(0), Length::make_px(0), Length::make_px(0), Length::make_px(0) }; }
     static Size width() { return Size::make_auto(); }
     static Size min_width() { return Size::make_auto(); }
     static Size max_width() { return Size::make_none(); }
@@ -541,6 +540,7 @@ public:
     Positioning position() const { return m_noninherited.position; }
     WhiteSpaceCollapse white_space_collapse() const { return m_inherited.white_space_collapse; }
     WhiteSpaceTrimData white_space_trim() const { return m_noninherited.white_space_trim; }
+    WordBreak word_break() const { return m_inherited.word_break; }
     CSSPixels const& word_spacing() const { return m_inherited.word_spacing; }
     CSSPixels letter_spacing() const { return m_inherited.letter_spacing; }
     FlexDirection flex_direction() const { return m_noninherited.flex_direction; }
@@ -606,6 +606,7 @@ public:
     LengthBox const& inset() const { return m_noninherited.inset; }
     LengthBox const& margin() const { return m_noninherited.margin; }
     LengthBox const& padding() const { return m_noninherited.padding; }
+    LengthBox const& overflow_clip_margin() const { return m_noninherited.overflow_clip_margin; }
 
     BorderData const& border_left() const { return m_noninherited.border_left; }
     BorderData const& border_top() const { return m_noninherited.border_top; }
@@ -635,7 +636,7 @@ public:
     FillRule fill_rule() const { return m_inherited.fill_rule; }
     Optional<SVGPaint> const& stroke() const { return m_inherited.stroke; }
     float fill_opacity() const { return m_inherited.fill_opacity; }
-    Vector<Variant<LengthPercentage, NumberOrCalculated>> const& stroke_dasharray() const { return m_inherited.stroke_dasharray; }
+    Vector<Variant<LengthPercentage, float>> const& stroke_dasharray() const { return m_inherited.stroke_dasharray; }
     LengthPercentage const& stroke_dashoffset() const { return m_inherited.stroke_dashoffset; }
     StrokeLinecap stroke_linecap() const { return m_inherited.stroke_linecap; }
     StrokeLinejoin stroke_linejoin() const { return m_inherited.stroke_linejoin; }
@@ -675,7 +676,6 @@ public:
     Gfx::FontCascadeList const& font_list() const { return *m_inherited.font_list; }
     CSSPixels font_size() const { return m_inherited.font_size; }
     double font_weight() const { return m_inherited.font_weight; }
-    Gfx::ShapeFeatures font_features() const { return m_inherited.font_features; }
     Optional<FlyString> font_language_override() const { return m_inherited.font_language_override; }
     HashMap<FlyString, double> font_variation_settings() const { return m_inherited.font_variation_settings; }
     CSSPixels line_height() const { return m_inherited.line_height; }
@@ -712,7 +712,6 @@ protected:
         CSSPixels font_size { InitialValues::font_size() };
         RefPtr<Gfx::FontCascadeList const> font_list {};
         double font_weight { InitialValues::font_weight() };
-        Gfx::ShapeFeatures font_features { InitialValues::font_features() };
         Optional<FlyString> font_language_override;
         HashMap<FlyString, double> font_variation_settings;
         CSSPixels line_height { InitialValues::line_height() };
@@ -760,7 +759,7 @@ protected:
         ClipRule clip_rule { InitialValues::clip_rule() };
         MathShift math_shift { InitialValues::math_shift() };
         MathStyle math_style { InitialValues::math_style() };
-        Vector<Variant<LengthPercentage, NumberOrCalculated>> stroke_dasharray;
+        Vector<Variant<LengthPercentage, float>> stroke_dasharray;
         LengthPercentage stroke_dashoffset { InitialValues::stroke_dashoffset() };
         double stroke_miterlimit { InitialValues::stroke_miterlimit() };
         LengthPercentage stroke_width { InitialValues::stroke_width() };
@@ -800,6 +799,7 @@ protected:
         LengthBox inset { InitialValues::inset() };
         LengthBox margin { InitialValues::margin() };
         LengthBox padding { InitialValues::padding() };
+        LengthBox overflow_clip_margin { InitialValues::overflow_clip_margin() };
         Filter backdrop_filter { InitialValues::backdrop_filter() };
         Filter filter { InitialValues::filter() };
         BorderData border_left;
@@ -932,7 +932,6 @@ public:
     void set_font_list(NonnullRefPtr<Gfx::FontCascadeList const> font_list) { m_inherited.font_list = move(font_list); }
     void set_font_size(CSSPixels font_size) { m_inherited.font_size = font_size; }
     void set_font_weight(double font_weight) { m_inherited.font_weight = font_weight; }
-    void set_font_features(Gfx::ShapeFeatures font_features) { m_inherited.font_features = move(font_features); }
     void set_font_language_override(Optional<FlyString> font_language_override) { m_inherited.font_language_override = move(font_language_override); }
     void set_font_variation_settings(HashMap<FlyString, double> value) { m_inherited.font_variation_settings = move(value); }
     void set_line_height(CSSPixels line_height) { m_inherited.line_height = line_height; }
@@ -984,6 +983,7 @@ public:
     void set_inset(LengthBox const& inset) { m_noninherited.inset = inset; }
     void set_margin(LengthBox const& margin) { m_noninherited.margin = margin; }
     void set_padding(LengthBox const& padding) { m_noninherited.padding = padding; }
+    void set_overflow_clip_margin(LengthBox const& overflow_clip_margin) { m_noninherited.overflow_clip_margin = overflow_clip_margin; }
     void set_overflow_x(Overflow value) { m_noninherited.overflow_x = value; }
     void set_overflow_y(Overflow value) { m_noninherited.overflow_y = value; }
     void set_list_style_type(ListStyleType value) { m_inherited.list_style_type = move(value); }
@@ -1090,7 +1090,7 @@ public:
     void set_stroke(SVGPaint value) { m_inherited.stroke = move(value); }
     void set_fill_rule(FillRule value) { m_inherited.fill_rule = value; }
     void set_fill_opacity(float value) { m_inherited.fill_opacity = value; }
-    void set_stroke_dasharray(Vector<Variant<LengthPercentage, NumberOrCalculated>> value) { m_inherited.stroke_dasharray = move(value); }
+    void set_stroke_dasharray(Vector<Variant<LengthPercentage, float>> value) { m_inherited.stroke_dasharray = move(value); }
     void set_stroke_dashoffset(LengthPercentage value) { m_inherited.stroke_dashoffset = move(value); }
     void set_stroke_linecap(StrokeLinecap value) { m_inherited.stroke_linecap = move(value); }
     void set_stroke_linejoin(StrokeLinejoin value) { m_inherited.stroke_linejoin = move(value); }
@@ -1117,8 +1117,8 @@ public:
     void set_cx(LengthPercentage cx) { m_noninherited.cx = move(cx); }
     void set_cy(LengthPercentage cy) { m_noninherited.cy = move(cy); }
     void set_r(LengthPercentage r) { m_noninherited.r = move(r); }
-    void set_rx(LengthPercentage rx) { m_noninherited.rx = move(rx); }
-    void set_ry(LengthPercentage ry) { m_noninherited.ry = move(ry); }
+    void set_rx(LengthPercentageOrAuto rx) { m_noninherited.rx = move(rx); }
+    void set_ry(LengthPercentageOrAuto ry) { m_noninherited.ry = move(ry); }
     void set_x(LengthPercentage x) { m_noninherited.x = move(x); }
     void set_y(LengthPercentage y) { m_noninherited.y = move(y); }
 

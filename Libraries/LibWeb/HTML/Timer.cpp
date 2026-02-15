@@ -35,8 +35,9 @@ void Timer::visit_edges(Cell::Visitor& visitor)
     visitor.visit_possible_values(m_timer->on_timeout.raw_capture_range());
 }
 
-Timer::~Timer()
+void Timer::finalize()
 {
+    Base::finalize();
     VERIFY(!m_timer->is_active());
 }
 
@@ -53,6 +54,12 @@ void Timer::stop()
 void Timer::set_callback(Function<void()> callback)
 {
     m_timer->on_timeout = move(callback);
+}
+
+void Timer::set_interval(i32 milliseconds)
+{
+    if (m_timer->interval() != milliseconds)
+        m_timer->restart(milliseconds);
 }
 
 }

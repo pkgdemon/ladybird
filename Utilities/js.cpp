@@ -194,11 +194,8 @@ static ErrorOr<bool> parse_and_run(JS::Realm& realm, StringView source, StringVi
 
     JS::ThrowCompletionOr<JS::Value> result { JS::js_undefined() };
 
-    auto run_script_or_module = [&](auto& script_or_module) {
-        if (s_dump_ast)
-            script_or_module->parse_node().dump(0);
-
-        result = vm.bytecode_interpreter().run(*script_or_module);
+    auto dump_ast = [&](auto const& node) {
+        node.dump({ .prefix = {}, .use_color = !s_strip_ansi });
     };
 
     if (!s_as_module) {
@@ -215,8 +212,11 @@ static ErrorOr<bool> parse_and_run(JS::Realm& realm, StringView source, StringVi
             outln("{}", error_string);
             result = vm.throw_completion<JS::SyntaxError>(move(error_string));
         } else {
+            auto script = script_or_error.release_value();
+            if (s_dump_ast)
+                dump_ast(*script->parse_node());
             if (!parse_only)
-                run_script_or_module(script_or_error.value());
+                result = vm.bytecode_interpreter().run(*script);
         }
     } else {
         auto module_or_error = JS::SourceTextModule::parse(source, realm, source_name);
@@ -232,8 +232,11 @@ static ErrorOr<bool> parse_and_run(JS::Realm& realm, StringView source, StringVi
             outln("{}", error_string);
             result = vm.throw_completion<JS::SyntaxError>(move(error_string));
         } else {
+            auto module = module_or_error.release_value();
+            if (s_dump_ast && module->parse_node())
+                dump_ast(*module->parse_node());
             if (!parse_only)
-                run_script_or_module(module_or_error.value());
+                result = vm.bytecode_interpreter().run(*module);
         }
     }
 
@@ -446,8 +449,8 @@ public:
             if (!trace.label.is_empty())
                 builder.appendff("{}\033[36;1m{}\033[0m\n", indent, trace.label);
 
-            for (auto& function_name : trace.stack)
-                builder.appendff("{}-> {}\n", indent, function_name);
+            for (auto& frame : trace.stack)
+                builder.appendff("{}-> {}\n", indent, frame.function_name);
 
             outln("{}", builder.string_view());
             return JS::js_undefined();

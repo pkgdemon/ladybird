@@ -48,7 +48,8 @@ Optional<ViewImplementation&> ViewImplementation::find_view_by_id(u64 id)
 }
 
 ViewImplementation::ViewImplementation()
-    : m_view_id(s_view_count++)
+    : m_document_cookie_version_buffer(Core::create_shared_version_buffer())
+    , m_view_id(s_view_count++)
 {
     s_all_views.set(m_view_id, this);
 
@@ -98,8 +99,10 @@ u64 ViewImplementation::page_id() const
 
 void ViewImplementation::create_new_process_for_cross_site_navigation(URL::URL const& url)
 {
-    if (m_client_state.client)
+    if (m_client_state.client) {
+        m_client_state.client->unregister_view(m_client_state.page_index);
         client().async_close_server();
+    }
 
     initialize_client();
     VERIFY(m_client_state.client);
@@ -255,6 +258,44 @@ void ViewImplementation::set_preferred_contrast(Web::CSS::PreferredContrast cont
 void ViewImplementation::set_preferred_motion(Web::CSS::PreferredMotion motion)
 {
     client().async_set_preferred_motion(page_id(), motion);
+}
+
+void ViewImplementation::notify_cookies_changed(HashTable<String> const& changed_domains, ReadonlySpan<HTTP::Cookie::Cookie> cookies)
+{
+    for (auto const& domain : changed_domains) {
+        if (auto document_index = m_document_cookie_version_indices.get(domain); document_index.has_value())
+            Core::increment_shared_version(m_document_cookie_version_buffer, *document_index);
+    }
+
+    if (!cookies.is_empty())
+        client().async_cookies_changed(page_id(), cookies);
+}
+
+ErrorOr<Core::SharedVersionIndex> ViewImplementation::ensure_document_cookie_version_index(Badge<WebContentClient>, String const& domain)
+{
+    return m_document_cookie_version_indices.try_ensure(domain, [&]() -> ErrorOr<Core::SharedVersionIndex> {
+        Core::SharedVersionIndex document_index = m_document_cookie_version_indices.size();
+
+        if (!Core::initialize_shared_version(m_document_cookie_version_buffer, document_index)) {
+            dbgln("Reached maximum document cookie version count for {}, cannot create new version for {}", m_url, domain);
+            return Error::from_string_literal("Reached maximum document cookie version count");
+        }
+
+        return document_index;
+    });
+}
+
+Optional<Core::SharedVersion> ViewImplementation::document_cookie_version(URL::URL const& url) const
+{
+    auto domain = HTTP::Cookie::canonicalize_domain(url);
+    if (!domain.has_value())
+        return {};
+
+    auto document_index = m_document_cookie_version_indices.get(*domain);
+    if (!document_index.has_value())
+        return {};
+
+    return Core::get_shared_version(m_document_cookie_version_buffer, *document_index);
 }
 
 ByteString ViewImplementation::selected_text()
@@ -585,6 +626,7 @@ void ViewImplementation::initialize_client(CreateNewClient create_new_client)
     client().async_set_device_pixel_ratio(m_client_state.page_index, m_device_pixel_ratio);
     client().async_set_maximum_frames_per_second(m_client_state.page_index, m_maximum_frames_per_second);
     client().async_set_system_visibility_state(m_client_state.page_index, m_system_visibility_state);
+    client().async_set_document_cookie_version_buffer(m_client_state.page_index, m_document_cookie_version_buffer);
 
     if (auto webdriver_content_ipc_path = Application::browser_options().webdriver_content_ipc_path; webdriver_content_ipc_path.has_value())
         client().async_connect_to_webdriver(m_client_state.page_index, *webdriver_content_ipc_path);
@@ -779,11 +821,17 @@ NonnullRefPtr<Core::Promise<String>> ViewImplementation::request_internal_page_i
     return promise;
 }
 
-void ViewImplementation::did_receive_internal_page_info(Badge<WebContentClient>, PageInfoType, String const& info)
+void ViewImplementation::did_receive_internal_page_info(Badge<WebContentClient>, PageInfoType, Optional<Core::AnonymousBuffer> const& info)
 {
     VERIFY(m_pending_info_request);
 
-    m_pending_info_request->resolve(String { info });
+    String info_string;
+    if (!info.has_value()) {
+        info_string = "(no page)"_string;
+    } else {
+        info_string = MUST(String::from_utf8(info->bytes()));
+    }
+    m_pending_info_request->resolve(move(info_string));
     m_pending_info_request = nullptr;
 }
 
@@ -793,10 +841,13 @@ ErrorOr<LexicalPath> ViewImplementation::dump_gc_graph()
     auto gc_graph_json = TRY(promise->await());
 
     LexicalPath path { Core::StandardPaths::tempfile_directory() };
-    path = path.append(TRY(AK::UnixDateTime::now().to_string("gc-graph-%Y-%m-%d-%H-%M-%S.json"sv)));
+    path = path.append(TRY(AK::UnixDateTime::now().to_string("gc-graph-%Y-%m-%d-%H-%M-%S.js"sv)));
 
+    // Write as a .js file so gc-heap-explorer.html can load it via <script> tag (avoiding CORS issues with file:// URLs)
     auto dump_file = TRY(Core::File::open(path.string(), Core::File::OpenMode::Write));
+    TRY(dump_file->write_until_depleted("var GC_GRAPH_DUMP = "sv.bytes()));
     TRY(dump_file->write_until_depleted(gc_graph_json.bytes()));
+    TRY(dump_file->write_until_depleted(";\n"sv.bytes()));
 
     return path;
 }
@@ -875,6 +926,13 @@ void ViewImplementation::initialize_context_menus()
     m_open_image_action = Action::create("Open Image"sv, ActionID::OpenImage, [this]() {
         load(m_context_menu_url);
     });
+    m_save_image_action = Action::create("Save Image As..."sv, ActionID::SaveImage, [this]() {
+        auto download_path = Application::the().path_for_downloaded_file(m_context_menu_url.basename());
+        if (download_path.is_error())
+            return;
+
+        Application::the().file_downloader().download_file(m_context_menu_url, download_path.release_value());
+    });
     m_copy_image_action = Action::create("Copy Image"sv, ActionID::CopyImage, [this]() {
         if (!m_image_context_menu_bitmap.has_value())
             return;
@@ -941,6 +999,8 @@ void ViewImplementation::initialize_context_menus()
     m_image_context_menu = Menu::create("Image Context Menu"sv);
     m_image_context_menu->add_action(*m_open_image_action);
     m_image_context_menu->add_action(*m_open_in_new_tab_action);
+    m_image_context_menu->add_separator();
+    m_image_context_menu->add_action(*m_save_image_action);
     m_image_context_menu->add_separator();
     m_image_context_menu->add_action(*m_copy_image_action);
     m_image_context_menu->add_action(*m_copy_url_action);
@@ -1050,6 +1110,11 @@ u64 ViewImplementation::add_navigation_listener(NavigationListener listener)
 void ViewImplementation::remove_navigation_listener(u64 listener_id)
 {
     m_navigation_listeners.remove(listener_id);
+}
+
+void ViewImplementation::request_close()
+{
+    client().async_request_close(page_id());
 }
 
 }

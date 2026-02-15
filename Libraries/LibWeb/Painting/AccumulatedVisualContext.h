@@ -66,14 +66,12 @@ struct EffectsData {
     float opacity { 1.0f };
     Gfx::CompositingAndBlendingOperator blend_mode { Gfx::CompositingAndBlendingOperator::Normal };
     ResolvedCSSFilter filter;
-    bool isolate { false };
 
     bool needs_layer() const
     {
         return opacity < 1.0f
             || blend_mode != Gfx::CompositingAndBlendingOperator::Normal
-            || filter.has_filters()
-            || isolate;
+            || filter.has_filters();
     }
 };
 
@@ -94,6 +92,7 @@ public:
     void dump(StringBuilder&) const;
 
     Optional<CSSPixelPoint> transform_point_for_hit_test(CSSPixelPoint screen_point, ScrollStateSnapshot const& scroll_state) const;
+    CSSPixelPoint inverse_transform_point(CSSPixelPoint point) const;
     CSSPixelRect transform_rect_to_viewport(CSSPixelRect const&, ScrollStateSnapshot const&) const;
 
 private:

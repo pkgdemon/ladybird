@@ -7,7 +7,10 @@
 #include <LibGfx/ImmutableBitmap.h>
 #include <LibJS/Runtime/Realm.h>
 #include <LibWeb/CSS/CSSKeyframesRule.h>
+#include <LibWeb/CSS/CSSStyleRule.h>
+#include <LibWeb/CSS/CSSStyleSheet.h>
 #include <LibWeb/CSS/PropertyID.h>
+#include <LibWeb/DOM/Document.h>
 #include <LibWeb/HTML/EventLoop/EventLoop.h>
 #include <LibWeb/HTML/Navigable.h>
 #include <LibWeb/HTML/Scripting/TemporaryExecutionContext.h>
@@ -855,7 +858,7 @@ ErrorOr<void> ViewTransition::update_pseudo_element_styles()
             // 1. Return failure if any of the following conditions is true:
 
             //    - capturedElement’s new element has a flat tree ancestor that skips its contents.
-            for (auto ancestor = captured_element->new_element->parent_element(); ancestor; ancestor = ancestor->parent_element()) {
+            for (auto ancestor = captured_element->new_element->flat_tree_parent_element(); ancestor; ancestor = ancestor->flat_tree_parent_element()) {
                 if (ancestor->skips_its_contents())
                     return Error::from_string_literal("capturedElement’s new element has a flat tree ancestor that skips its contents.");
             }

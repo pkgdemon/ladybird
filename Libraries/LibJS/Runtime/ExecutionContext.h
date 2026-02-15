@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2024, Andreas Kling <andreas@ladybird.org>
+ * Copyright (c) 2020-2026, Andreas Kling <andreas@ladybird.org>
  * Copyright (c) 2020-2021, Linus Groh <linusg@serenityos.org>
  * Copyright (c) 2022, Luke Wilde <lukew@serenityos.org>
  * Copyright (c) 2024-2025, Aliaksandr Kalenik <kalenik.aliaksandr@gmail.com>
@@ -33,26 +33,22 @@ public:
     {
     }
 
+    SourceRange const& realize_source_range()
+    {
+        static SourceRange dummy_source_range { SourceCode::create({}, {}), {}, {} };
+
+        if (auto* unrealized = source_range.get_pointer<UnrealizedSourceRange>()) {
+            if (unrealized->source_code) {
+                source_range = unrealized->realize();
+            } else {
+                source_range = dummy_source_range;
+            }
+        }
+        return source_range.get<SourceRange>();
+    }
+
     size_t program_counter { 0 };
     Variant<UnrealizedSourceRange, SourceRange> source_range;
-};
-
-class JS_API ExecutionContextRareData final : public GC::Cell {
-    GC_CELL(ExecutionContextRareData, GC::Cell);
-    GC_DECLARE_ALLOCATOR(ExecutionContextRareData);
-
-public:
-    Vector<Bytecode::UnwindInfo> unwind_contexts;
-    Vector<Optional<size_t>> previously_scheduled_jumps;
-    Vector<GC::Ptr<Environment>> saved_lexical_environments;
-
-    mutable GC::Ptr<CachedSourceRange> cached_source_range;
-
-    // Non-standard: This points at something that owns this ExecutionContext, in case it needs to be protected from GC.
-    GC::Ptr<Cell> context_owner;
-
-private:
-    virtual void visit_edges(Cell::Visitor&) override;
 };
 
 // 9.4 Execution Contexts, https://tc39.es/ecma262/#sec-execution-contexts
@@ -81,9 +77,6 @@ public:
         arguments = { values + registers_and_locals_and_constants_count, arguments_count };
     }
 
-    GC::Ptr<ExecutionContextRareData> rare_data() const { return m_rare_data; }
-    GC::Ref<ExecutionContextRareData> ensure_rare_data();
-
     void operator delete(void* ptr);
 
     GC::Ptr<FunctionObject> function;                // [[Function]]
@@ -93,7 +86,6 @@ public:
     GC::Ptr<Environment> variable_environment;       // [[VariableEnvironment]]
     GC::Ptr<PrivateEnvironment> private_environment; // [[PrivateEnvironment]]
 
-    Optional<size_t> scheduled_jump;
     GC::Ptr<Object> global_object;
     GC::Ptr<DeclarativeEnvironment> global_declarative_environment;
     Utf16FlyString const* identifier_table { nullptr };
@@ -128,9 +120,10 @@ public:
 
     Span<Value> arguments;
 
-    // NOTE: Rarely used data members go here to keep the size of ExecutionContext down,
-    //       and to avoid needing an ExecutionContext destructor in the common case.
-    GC::Ptr<ExecutionContextRareData> m_rare_data;
+    mutable GC::Ptr<CachedSourceRange> cached_source_range;
+
+    // Non-standard: This points at something that owns this ExecutionContext, in case it needs to be protected from GC.
+    GC::Ptr<GC::Cell> context_owner;
 
     u32 passed_argument_count { 0 };
 

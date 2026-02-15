@@ -36,6 +36,7 @@
 #include <LibWeb/CSS/StyleValues/ColorStyleValue.h>
 #include <LibWeb/CSS/StyleValues/ConicGradientStyleValue.h>
 #include <LibWeb/CSS/StyleValues/CounterDefinitionsStyleValue.h>
+#include <LibWeb/CSS/StyleValues/CounterStyleStyleValue.h>
 #include <LibWeb/CSS/StyleValues/CounterStyleValue.h>
 #include <LibWeb/CSS/StyleValues/CustomIdentStyleValue.h>
 #include <LibWeb/CSS/StyleValues/EasingStyleValue.h>
@@ -2232,7 +2233,7 @@ RefPtr<StyleValue const> Parser::parse_color_mix_function(TokenStream<ComponentV
             }
         } else {
             auto color_space_token = function_tokens.consume_a_token();
-            if (color_space_token.token().type() != Token::Type::Ident)
+            if (!color_space_token.is(Token::Type::Ident))
                 return {};
             color_space = color_space_token.token().ident().to_string();
         }
@@ -2592,16 +2593,11 @@ RefPtr<StyleValue const> Parser::parse_counter_value(TokenStream<ComponentValue>
     };
 
     auto parse_counter_style = [this](TokenStream<ComponentValue>& tokens) -> RefPtr<StyleValue const> {
-        // https://drafts.csswg.org/css-counter-styles-3/#typedef-counter-style
-        // <counter-style> = <counter-style-name> | <symbols()>
-        // For now we just support <counter-style-name>, found here:
-        // https://drafts.csswg.org/css-counter-styles-3/#typedef-counter-style-name
-        // <counter-style-name> is a <custom-ident> that is not an ASCII case-insensitive match for none.
         auto transaction = tokens.begin_transaction();
         tokens.discard_whitespace();
 
-        auto counter_style_name = parse_custom_ident_value(tokens, { { "none"sv } });
-        if (!counter_style_name)
+        auto counter_style = parse_counter_style_value(tokens);
+        if (!counter_style)
             return {};
 
         tokens.discard_whitespace();
@@ -2609,7 +2605,7 @@ RefPtr<StyleValue const> Parser::parse_counter_value(TokenStream<ComponentValue>
             return {};
 
         transaction.commit();
-        return counter_style_name.release_nonnull();
+        return counter_style.release_nonnull();
     };
 
     auto transaction = tokens.begin_transaction();
@@ -2637,7 +2633,7 @@ RefPtr<StyleValue const> Parser::parse_counter_value(TokenStream<ComponentValue>
                 return nullptr;
         } else {
             // In both cases, if the <counter-style> argument is omitted it defaults to `decimal`.
-            counter_style = CustomIdentStyleValue::create("decimal"_fly_string);
+            counter_style = CounterStyleStyleValue::create("decimal"_fly_string);
         }
 
         transaction.commit();
@@ -2674,7 +2670,7 @@ RefPtr<StyleValue const> Parser::parse_counter_value(TokenStream<ComponentValue>
                 return nullptr;
         } else {
             // In both cases, if the <counter-style> argument is omitted it defaults to `decimal`.
-            counter_style = CustomIdentStyleValue::create("decimal"_fly_string);
+            counter_style = CounterStyleStyleValue::create("decimal"_fly_string);
         }
 
         transaction.commit();
@@ -2682,6 +2678,113 @@ RefPtr<StyleValue const> Parser::parse_counter_value(TokenStream<ComponentValue>
     }
 
     return nullptr;
+}
+
+// https://drafts.csswg.org/css-counter-styles-3/#typedef-counter-style-name
+Optional<FlyString> Parser::parse_counter_style_name(TokenStream<ComponentValue>& tokens)
+{
+    // <counter-style-name> is a <custom-ident> that is not an ASCII case-insensitive match for none.
+    auto transaction = tokens.begin_transaction();
+    tokens.discard_whitespace();
+
+    auto custom_ident = parse_custom_ident(tokens, { { "none"sv } });
+    if (!custom_ident.has_value())
+        return {};
+
+    // https://drafts.csswg.org/css-counter-styles-3/#the-counter-style-rule
+    // Counter style names are case-sensitive. However, the names defined in this specification are ASCII lowercased
+    // on parse wherever they are used as counter styles, e.g. in the list-style set of properties, in the
+    // @counter-style rule, and in the counter() functions.
+
+    // NB: The "names defined in this specification" are defined in the `CounterStyleNameKeyword` enum
+    // FIXME: Include the rest of the defined names in `CounterStyleNameKeyword`
+    auto const& keyword = keyword_from_string(custom_ident.value());
+    if (keyword.has_value() && keyword_to_counter_style_name_keyword(keyword.value()).has_value())
+        custom_ident = custom_ident->to_ascii_lowercase();
+
+    transaction.commit();
+    return custom_ident;
+}
+
+// https://drafts.csswg.org/css-counter-styles-3/#typedef-counter-style
+RefPtr<StyleValue const> Parser::parse_counter_style_value(TokenStream<ComponentValue>& tokens)
+{
+    // <counter-style> = <counter-style-name> | <symbols()>
+    auto transaction = tokens.begin_transaction();
+    tokens.discard_whitespace();
+
+    if (auto const& counter_style_name = parse_counter_style_name(tokens); counter_style_name.has_value()) {
+        transaction.commit();
+        return CounterStyleStyleValue::create(counter_style_name.value());
+    }
+
+    // FIXME: Support <symbols()>
+
+    return nullptr;
+}
+
+// https://drafts.csswg.org/css-counter-styles-3/#typedef-symbol
+RefPtr<StyleValue const> Parser::parse_symbol_value(TokenStream<ComponentValue>& tokens)
+{
+    // <symbol> = <string> | <image> | <custom-ident>
+    // Note: The <image> syntax in <symbol> is currently at-risk. No implementations have plans to implement it
+    //       currently, and it complicates some usages of counter() in ways that haven’t been fully handled.
+    // NB: Given the above we don't currently support <image> here - we may need to revisit this if other browsers implement it.
+    auto transaction = tokens.begin_transaction();
+    tokens.discard_whitespace();
+
+    if (auto string_value = parse_string_value(tokens)) {
+        transaction.commit();
+        return string_value;
+    }
+
+    if (auto custom_ident_value = parse_custom_ident_value(tokens, {})) {
+        transaction.commit();
+        return custom_ident_value;
+    }
+
+    return nullptr;
+}
+
+RefPtr<StyleValue const> Parser::parse_nonnegative_integer_symbol_pair_value(TokenStream<ComponentValue>& tokens)
+{
+    auto transaction = tokens.begin_transaction();
+    tokens.discard_whitespace();
+
+    RefPtr<StyleValue const> integer;
+    RefPtr<StyleValue const> symbol;
+
+    while (tokens.has_next_token()) {
+        if (auto integer_value = parse_integer_value(tokens)) {
+            if (integer)
+                return nullptr;
+
+            if (integer_value->is_integer() && integer_value->as_integer().integer() < 0)
+                return nullptr;
+
+            integer = integer_value;
+            tokens.discard_whitespace();
+            continue;
+        }
+
+        if (auto symbol_value = parse_symbol_value(tokens)) {
+            if (symbol)
+                return nullptr;
+
+            symbol = symbol_value;
+            tokens.discard_whitespace();
+            continue;
+        }
+
+        break;
+    }
+
+    if (!integer || !symbol)
+        return nullptr;
+
+    transaction.commit();
+
+    return StyleValueList::create({ integer.release_nonnull(), symbol.release_nonnull() }, StyleValueList::Separator::Space);
 }
 
 RefPtr<StyleValue const> Parser::parse_ratio_value(TokenStream<ComponentValue>& tokens)
@@ -4670,9 +4773,15 @@ RefPtr<CalculatedStyleValue const> Parser::parse_calculated_value(ComponentValue
                 // FIXME: Add other functions that provide a context for resolving values
                 return {};
             },
-            [](DescriptorContext const&) -> Optional<CalculationContext> {
-                // FIXME: If any descriptors have `<*-percentage>` or `<integer>` types, add them here.
-                return CalculationContext {};
+            [](DescriptorContext const& descriptor_context) -> Optional<CalculationContext> {
+                switch (descriptor_context.descriptor) {
+                case DescriptorID::AdditiveSymbols:
+                case DescriptorID::Pad:
+                    return CalculationContext { .resolve_numbers_as_integers = true, .accepted_type_ranges = { { ValueType::Integer, { 0, NumericLimits<float>::max() } } } };
+                default:
+                    return CalculationContext {};
+                }
+                // FIXME: Add other descriptors which require special calculation contexts
             },
             [](SpecialContext special_context) -> Optional<CalculationContext> {
                 switch (special_context) {
@@ -5462,6 +5571,8 @@ RefPtr<StyleValue const> Parser::parse_value(ValueType value_type, TokenStream<C
         return parse_corner_shape_value(tokens);
     case ValueType::Counter:
         return parse_counter_value(tokens);
+    case ValueType::CounterStyle:
+        return parse_counter_style_value(tokens);
     case ValueType::CustomIdent:
         // FIXME: Figure out how to pass the blacklist here
         return parse_custom_ident_value(tokens, {});

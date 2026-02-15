@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Range.h>
 #include <LibWeb/GraphemeEdgeTracker.h>
 #include <LibWeb/HTML/FormAssociatedElement.h>
@@ -19,11 +20,12 @@ PaintableFragment::PaintableFragment(Layout::LineBoxFragment const& fragment)
     : m_layout_node(fragment.layout_node())
     , m_offset(fragment.offset())
     , m_size(fragment.size())
-    , m_baseline(fragment.baseline())
     , m_start_offset(fragment.start())
     , m_length_in_code_units(fragment.length_in_code_units())
     , m_glyph_run(fragment.glyph_run())
+    , m_baseline(fragment.baseline())
     , m_writing_mode(fragment.writing_mode())
+    , m_has_trailing_whitespace(fragment.has_trailing_whitespace())
 {
 }
 
@@ -63,98 +65,77 @@ size_t PaintableFragment::index_in_node_for_point(CSSPixelPoint position) const
     return m_start_offset + tracker.resolve();
 }
 
-CSSPixelRect PaintableFragment::range_rect(Paintable::SelectionState selection_state, size_t start_offset_in_code_units, size_t end_offset_in_code_units) const
+Optional<PaintableFragment::SelectionOffsets> PaintableFragment::compute_selection_offsets(Paintable::SelectionState selection_state, size_t start_offset_in_code_units, size_t end_offset_in_code_units) const
 {
-    if (selection_state == Paintable::SelectionState::Full)
-        return absolute_rect();
-
     auto const start_index = m_start_offset;
     auto const end_index = m_start_offset + m_length_in_code_units;
 
+    switch (selection_state) {
+    case Paintable::SelectionState::None:
+        return {};
+    case Paintable::SelectionState::Full:
+        return SelectionOffsets { 0, m_length_in_code_units, true };
+    case Paintable::SelectionState::StartAndEnd:
+        if (start_index > end_offset_in_code_units || end_index < start_offset_in_code_units)
+            return {};
+        return SelectionOffsets {
+            start_offset_in_code_units - min(start_offset_in_code_units, m_start_offset),
+            min(end_offset_in_code_units - m_start_offset, m_length_in_code_units),
+            end_offset_in_code_units >= end_index,
+        };
+    case Paintable::SelectionState::Start:
+        if (end_index < start_offset_in_code_units)
+            return {};
+        return SelectionOffsets {
+            start_offset_in_code_units - min(start_offset_in_code_units, m_start_offset),
+            m_length_in_code_units,
+            true,
+        };
+    case Paintable::SelectionState::End:
+        if (start_index > end_offset_in_code_units)
+            return {};
+        return SelectionOffsets {
+            0,
+            min(end_offset_in_code_units - m_start_offset, m_length_in_code_units),
+            end_offset_in_code_units >= end_index,
+        };
+    }
+    VERIFY_NOT_REACHED();
+}
+
+CSSPixelRect PaintableFragment::range_rect(Paintable::SelectionState selection_state, size_t start_offset_in_code_units, size_t end_offset_in_code_units) const
+{
+    auto offsets = compute_selection_offsets(selection_state, start_offset_in_code_units, end_offset_in_code_units);
+    if (!offsets.has_value())
+        return {};
+
+    auto rect = absolute_rect();
     auto const& font = glyph_run() ? glyph_run()->font() : layout_node().first_available_font();
-    auto text = this->text();
 
-    if (first_is_one_of(selection_state, Paintable::SelectionState::StartAndEnd, Paintable::SelectionState::None)) {
-        // we are in the start/end node (both the same)
-        if (start_index > end_offset_in_code_units)
-            return {};
-        if (end_index < start_offset_in_code_units)
-            return {};
+    CSSPixels pixel_offset;
+    CSSPixels pixel_width;
 
-        auto selection_start_in_this_fragment = max(0, start_offset_in_code_units - m_start_offset);
-        auto selection_end_in_this_fragment = min(m_length_in_code_units, end_offset_in_code_units - m_start_offset);
-        auto pixel_distance_to_first_selected_character = CSSPixels::nearest_value_for(font.width(text.substring_view(0, selection_start_in_this_fragment)));
-        auto pixel_width_of_selection = CSSPixels::nearest_value_for(font.width(text.substring_view(selection_start_in_this_fragment, selection_end_in_this_fragment - selection_start_in_this_fragment))) + 1;
+    // When entire fragment is selected, use the rect's existing dimensions rather than recalculating from text.
+    if (offsets->start == 0 && offsets->end == m_length_in_code_units && m_length_in_code_units > 0) {
+        pixel_offset = 0;
+        pixel_width = rect.primary_size_for_orientation(orientation());
+    } else {
+        pixel_offset = CSSPixels::nearest_value_for(font.width(text().substring_view(0, offsets->start)));
 
-        auto rect = absolute_rect();
-        switch (orientation()) {
-        case Gfx::Orientation::Horizontal:
-            rect.set_x(rect.x() + pixel_distance_to_first_selected_character);
-            rect.set_width(pixel_width_of_selection);
-            break;
-        case Gfx::Orientation::Vertical:
-            rect.set_y(rect.y() + pixel_distance_to_first_selected_character);
-            rect.set_height(pixel_width_of_selection);
-            break;
-        default:
-            VERIFY_NOT_REACHED();
+        // When start equals end, this is a cursor position.
+        if (offsets->start == offsets->end) {
+            pixel_width = 1;
+        } else {
+            pixel_width = CSSPixels::nearest_value_for(font.width(text().substring_view(offsets->start, offsets->end - offsets->start)));
         }
-
-        return rect;
     }
-    if (selection_state == Paintable::SelectionState::Start) {
-        // we are in the start node
-        if (end_index < start_offset_in_code_units)
-            return {};
 
-        auto selection_start_in_this_fragment = max(0, start_offset_in_code_units - m_start_offset);
-        auto selection_end_in_this_fragment = m_length_in_code_units;
-        auto pixel_distance_to_first_selected_character = CSSPixels::nearest_value_for(font.width(text.substring_view(0, selection_start_in_this_fragment)));
-        auto pixel_width_of_selection = CSSPixels::nearest_value_for(font.width(text.substring_view(selection_start_in_this_fragment, selection_end_in_this_fragment - selection_start_in_this_fragment))) + 1;
+    if (m_has_trailing_whitespace && offsets->include_trailing_whitespace && offsets->start != offsets->end)
+        pixel_width += CSSPixels::nearest_value_for(font.glyph_width(' '));
 
-        auto rect = absolute_rect();
-        switch (orientation()) {
-        case Gfx::Orientation::Horizontal:
-            rect.set_x(rect.x() + pixel_distance_to_first_selected_character);
-            rect.set_width(pixel_width_of_selection);
-            break;
-        case Gfx::Orientation::Vertical:
-            rect.set_y(rect.y() + pixel_distance_to_first_selected_character);
-            rect.set_height(pixel_width_of_selection);
-            break;
-        default:
-            VERIFY_NOT_REACHED();
-        }
-
-        return rect;
-    }
-    if (selection_state == Paintable::SelectionState::End) {
-        // we are in the end node
-        if (start_index > end_offset_in_code_units)
-            return {};
-
-        auto selection_start_in_this_fragment = 0;
-        auto selection_end_in_this_fragment = min<int>(end_offset_in_code_units - m_start_offset, m_length_in_code_units);
-        auto pixel_distance_to_first_selected_character = CSSPixels::nearest_value_for(font.width(text.substring_view(0, selection_start_in_this_fragment)));
-        auto pixel_width_of_selection = CSSPixels::nearest_value_for(font.width(text.substring_view(selection_start_in_this_fragment, selection_end_in_this_fragment - selection_start_in_this_fragment))) + 1;
-
-        auto rect = absolute_rect();
-        switch (orientation()) {
-        case Gfx::Orientation::Horizontal:
-            rect.set_x(rect.x() + pixel_distance_to_first_selected_character);
-            rect.set_width(pixel_width_of_selection);
-            break;
-        case Gfx::Orientation::Vertical:
-            rect.set_y(rect.y() + pixel_distance_to_first_selected_character);
-            rect.set_height(pixel_width_of_selection);
-            break;
-        default:
-            VERIFY_NOT_REACHED();
-        }
-
-        return rect;
-    }
-    return {};
+    rect.set_primary_offset_for_orientation(orientation(), rect.primary_offset_for_orientation(orientation()) + pixel_offset);
+    rect.set_primary_size_for_orientation(orientation(), pixel_width);
+    return rect;
 }
 
 Gfx::Orientation PaintableFragment::orientation() const
@@ -172,25 +153,50 @@ Gfx::Orientation PaintableFragment::orientation() const
     }
 }
 
-CSSPixelRect PaintableFragment::selection_rect() const
+Optional<PaintableFragment::SelectionOffsets> PaintableFragment::selection_range_for_text_control() const
 {
-    auto const selection_state = paintable().selection_state();
+    // For focused text controls (input/textarea), determine selection from the control's internal state.
+    auto const* text_control = as_if<HTML::FormAssociatedTextControlElement>(paintable().document().focused_area().ptr());
+    if (!text_control)
+        return {};
+    if (paintable().dom_node() != text_control->form_associated_element_to_text_node())
+        return {};
+
+    auto selection_start = text_control->selection_start();
+    auto selection_end = text_control->selection_end();
+    if (selection_start == selection_end)
+        return {};
+
+    return SelectionOffsets { selection_start, selection_end };
+}
+
+Optional<PaintableFragment::SelectionOffsets> PaintableFragment::selection_offsets() const
+{
+    if (auto offsets = selection_range_for_text_control(); offsets.has_value())
+        return compute_selection_offsets(Paintable::SelectionState::StartAndEnd, offsets->start, offsets->end);
+
+    auto selection_state = paintable().selection_state();
     if (selection_state == Paintable::SelectionState::None)
         return {};
 
-    if (auto const* focused_area = as_if<HTML::FormAssociatedTextControlElement>(paintable().document().focused_area().ptr())) {
-        HTML::FormAssociatedTextControlElement const* text_control_element = nullptr;
-        if (auto const* input_element = as_if<HTML::HTMLInputElement>(*focused_area)) {
-            text_control_element = input_element;
-        } else if (auto const* text_area_element = as_if<HTML::HTMLTextAreaElement>(*focused_area)) {
-            text_control_element = text_area_element;
-        } else {
-            VERIFY_NOT_REACHED();
-        }
-        auto selection_start = text_control_element->selection_start();
-        auto selection_end = text_control_element->selection_end();
-        return range_rect(selection_state, selection_start, selection_end);
-    }
+    auto selection = paintable().document().get_selection();
+    if (!selection)
+        return {};
+    auto range = selection->range();
+    if (!range)
+        return {};
+
+    return compute_selection_offsets(selection_state, range->start_offset(), range->end_offset());
+}
+
+CSSPixelRect PaintableFragment::selection_rect() const
+{
+    if (auto offsets = selection_range_for_text_control(); offsets.has_value())
+        return range_rect(Paintable::SelectionState::StartAndEnd, offsets->start, offsets->end);
+
+    auto const selection_state = paintable().selection_state();
+    if (selection_state == Paintable::SelectionState::None)
+        return {};
 
     auto selection = paintable().document().get_selection();
     if (!selection)

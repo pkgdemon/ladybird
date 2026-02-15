@@ -29,6 +29,8 @@
 #include <LibWeb/CSS/StyleValues/ConicGradientStyleValue.h>
 #include <LibWeb/CSS/StyleValues/ContentStyleValue.h>
 #include <LibWeb/CSS/StyleValues/CounterDefinitionsStyleValue.h>
+#include <LibWeb/CSS/StyleValues/CounterStyleStyleValue.h>
+#include <LibWeb/CSS/StyleValues/CounterStyleSystemStyleValue.h>
 #include <LibWeb/CSS/StyleValues/CounterStyleValue.h>
 #include <LibWeb/CSS/StyleValues/CursorStyleValue.h>
 #include <LibWeb/CSS/StyleValues/CustomIdentStyleValue.h>
@@ -81,6 +83,8 @@
 #include <LibWeb/CSS/StyleValues/UnicodeRangeStyleValue.h>
 #include <LibWeb/CSS/StyleValues/UnresolvedStyleValue.h>
 #include <LibWeb/CSS/StyleValues/ViewFunctionStyleValue.h>
+#include <LibWeb/CSS/SystemColor.h>
+#include <LibWeb/DOM/Document.h>
 #include <LibWeb/HTML/Navigable.h>
 #include <LibWeb/Layout/Node.h>
 
@@ -94,7 +98,8 @@ ColorResolutionContext ColorResolutionContext::for_element(DOM::AbstractElement 
 
     return {
         .color_scheme = color_scheme,
-        .current_color = element.computed_properties()->color_or_fallback(PropertyID::Color, { color_scheme, CSS::InitialValues::color(), element.document(), calculation_resolution_context }, CSS::InitialValues::color()),
+        .current_color = element.computed_properties()->color_or_fallback(PropertyID::Color, { color_scheme, CSS::InitialValues::color(), CSS::SystemColor::accent_color(color_scheme), element.document(), calculation_resolution_context }, CSS::InitialValues::color()),
+        .accent_color = element.computed_properties()->color_or_fallback(PropertyID::AccentColor, { color_scheme, CSS::InitialValues::color(), CSS::SystemColor::accent_color(color_scheme), element.document(), calculation_resolution_context }, CSS::SystemColor::accent_color(color_scheme)),
         .document = element.document(),
         .calculation_resolution_context = calculation_resolution_context
     };
@@ -105,6 +110,7 @@ ColorResolutionContext ColorResolutionContext::for_layout_node_with_style(Layout
     return {
         .color_scheme = layout_node.computed_values().color_scheme(),
         .current_color = layout_node.computed_values().color(),
+        .accent_color = layout_node.computed_values().accent_color(),
         .document = layout_node.document(),
         .calculation_resolution_context = { .length_resolution_context = Length::ResolutionContext::for_layout_node(layout_node) },
     };

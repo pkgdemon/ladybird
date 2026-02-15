@@ -31,7 +31,6 @@ public:
         Floats,
         BackgroundAndBordersForInlineLevelAndReplaced,
         Foreground,
-        FocusAndOverlay,
     };
 
     static void paint_node_as_stacking_context(Paintable const&, DisplayListRecordingContext&);
@@ -40,8 +39,6 @@ public:
     void paint(DisplayListRecordingContext&) const;
 
     [[nodiscard]] TraversalDecision hit_test(CSSPixelPoint, HitTestType, Function<TraversalDecision(HitTestResult)> const& callback) const;
-
-    Gfx::AffineTransform affine_transform_matrix() const;
 
     void dump(StringBuilder&, int indent = 0) const;
 

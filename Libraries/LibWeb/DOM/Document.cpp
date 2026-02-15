@@ -14,13 +14,17 @@
 #include <AK/Debug.h>
 #include <AK/GenericLexer.h>
 #include <AK/InsertionSort.h>
+#include <AK/JsonObjectSerializer.h>
+#include <AK/Random.h>
 #include <AK/StringBuilder.h>
 #include <AK/TemporaryChange.h>
 #include <AK/Time.h>
 #include <AK/Utf8View.h>
 #include <LibCore/Timer.h>
-#include <LibCrypto/SecureRandom.h>
 #include <LibGC/RootVector.h>
+#include <LibHTTP/Cookie/Cookie.h>
+#include <LibHTTP/Cookie/ParsedCookie.h>
+#include <LibJS/Console.h>
 #include <LibJS/Runtime/Array.h>
 #include <LibJS/Runtime/FunctionObject.h>
 #include <LibJS/Runtime/NativeFunction.h>
@@ -39,6 +43,8 @@
 #include <LibWeb/CSS/AnimationEvent.h>
 #include <LibWeb/CSS/CSSAnimation.h>
 #include <LibWeb/CSS/CSSImportRule.h>
+#include <LibWeb/CSS/CSSPropertyRule.h>
+#include <LibWeb/CSS/CSSStyleSheet.h>
 #include <LibWeb/CSS/CSSTransition.h>
 #include <LibWeb/CSS/ComputedProperties.h>
 #include <LibWeb/CSS/FontComputer.h>
@@ -48,7 +54,9 @@
 #include <LibWeb/CSS/Parser/Parser.h>
 #include <LibWeb/CSS/SelectorEngine.h>
 #include <LibWeb/CSS/StyleComputer.h>
+#include <LibWeb/CSS/StyleInvalidation.h>
 #include <LibWeb/CSS/StyleSheetIdentifier.h>
+#include <LibWeb/CSS/StyleSheetList.h>
 #include <LibWeb/CSS/StyleValues/ColorSchemeStyleValue.h>
 #include <LibWeb/CSS/StyleValues/GuaranteedInvalidStyleValue.h>
 #include <LibWeb/CSS/StyleValues/RandomValueSharingStyleValue.h>
@@ -58,7 +66,8 @@
 #include <LibWeb/ContentSecurityPolicy/Directives/Directive.h>
 #include <LibWeb/ContentSecurityPolicy/Policy.h>
 #include <LibWeb/ContentSecurityPolicy/PolicyList.h>
-#include <LibWeb/Cookie/ParsedCookie.h>
+#include <LibWeb/DOM/AbstractElement.h>
+#include <LibWeb/DOM/AccessibilityTreeNode.h>
 #include <LibWeb/DOM/AdoptedStyleSheets.h>
 #include <LibWeb/DOM/Attr.h>
 #include <LibWeb/DOM/CDATASection.h>
@@ -122,15 +131,18 @@
 #include <LibWeb/HTML/HTMLMetaElement.h>
 #include <LibWeb/HTML/HTMLObjectElement.h>
 #include <LibWeb/HTML/HTMLScriptElement.h>
+#include <LibWeb/HTML/HTMLSlotElement.h>
 #include <LibWeb/HTML/HTMLStyleElement.h>
 #include <LibWeb/HTML/HTMLTextAreaElement.h>
 #include <LibWeb/HTML/HTMLTitleElement.h>
 #include <LibWeb/HTML/HashChangeEvent.h>
+#include <LibWeb/HTML/History.h>
 #include <LibWeb/HTML/ListOfAvailableImages.h>
 #include <LibWeb/HTML/Location.h>
 #include <LibWeb/HTML/MessageEvent.h>
 #include <LibWeb/HTML/MessagePort.h>
 #include <LibWeb/HTML/Navigable.h>
+#include <LibWeb/HTML/NavigableContainer.h>
 #include <LibWeb/HTML/Navigation.h>
 #include <LibWeb/HTML/NavigationParams.h>
 #include <LibWeb/HTML/Numbers.h>
@@ -139,6 +151,7 @@
 #include <LibWeb/HTML/PopStateEvent.h>
 #include <LibWeb/HTML/Scripting/Agent.h>
 #include <LibWeb/HTML/Scripting/ClassicScript.h>
+#include <LibWeb/HTML/Scripting/Environments.h>
 #include <LibWeb/HTML/Scripting/ExceptionReporter.h>
 #include <LibWeb/HTML/Scripting/TemporaryExecutionContext.h>
 #include <LibWeb/HTML/Scripting/WindowEnvironmentSettingsObject.h>
@@ -155,14 +168,18 @@
 #include <LibWeb/Infra/Strings.h>
 #include <LibWeb/IntersectionObserver/IntersectionObserver.h>
 #include <LibWeb/Layout/BlockFormattingContext.h>
+#include <LibWeb/Layout/SVGFormattingContext.h>
+#include <LibWeb/Layout/SVGSVGBox.h>
 #include <LibWeb/Layout/TreeBuilder.h>
 #include <LibWeb/Layout/Viewport.h>
 #include <LibWeb/Namespace.h>
+#include <LibWeb/Page/EventHandler.h>
 #include <LibWeb/Page/Page.h>
 #include <LibWeb/Painting/AccumulatedVisualContext.h>
 #include <LibWeb/Painting/DisplayList.h>
 #include <LibWeb/Painting/DisplayListCommand.h>
 #include <LibWeb/Painting/PaintableBox.h>
+#include <LibWeb/Painting/StackingContext.h>
 #include <LibWeb/Painting/ViewportPaintable.h>
 #include <LibWeb/PermissionsPolicy/AutoplayAllowlist.h>
 #include <LibWeb/ResizeObserver/ResizeObserver.h>
@@ -181,9 +198,12 @@
 #include <LibWeb/UIEvents/KeyboardEvent.h>
 #include <LibWeb/UIEvents/MouseEvent.h>
 #include <LibWeb/UIEvents/TextEvent.h>
+#include <LibWeb/ViewTransition/ViewTransition.h>
 #include <LibWeb/WebIDL/AbstractOperations.h>
 #include <LibWeb/WebIDL/DOMException.h>
 #include <LibWeb/WebIDL/ExceptionOr.h>
+#include <LibWeb/WebIDL/ObservableArray.h>
+#include <LibWeb/XPath/XPath.h>
 
 namespace Web::DOM {
 
@@ -358,7 +378,7 @@ WebIDL::ExceptionOr<GC::Ref<Document>> Document::create_and_initialize(Type type
     // AD-HOC: The response object no longer has an associated timing info object. For now, we use response's non-standard response time property,
     //         which represents the time that the time that the response object was created.
     auto response_creation_time = navigation_params.response->monotonic_response_time().nanoseconds() / 1e6;
-    load_timing_info.navigation_start_time = HighResolutionTime::coarsen_time(response_creation_time, HTML::relevant_settings_object(*window).cross_origin_isolated_capability() == HTML::CanUseCrossOriginIsolatedAPIs::Yes);
+    load_timing_info.navigation_start_time = HighResolutionTime::coarsen_time(response_creation_time, HTML::relevant_settings_object(*window).cross_origin_isolated_capability());
 
     // 9. Let document be a new Document, with
     //    type: type
@@ -525,6 +545,8 @@ void Document::initialize(JS::Realm& realm)
     m_list_of_available_images = realm.create<HTML::ListOfAvailableImages>();
 
     page().client().page_did_create_new_document(*this);
+
+    ensure_cookie_version_index(m_url);
 }
 
 // https://html.spec.whatwg.org/multipage/document-lifecycle.html#populate-with-html/head/body
@@ -604,6 +626,8 @@ void Document::visit_edges(Cell::Visitor& visitor)
         visitor.visit(pending_scroll_event.event_target);
     for (auto& resize_observer : m_resize_observers)
         visitor.visit(resize_observer);
+
+    visitor.visit(m_svg_roots_needing_relayout);
 
     visitor.visit(m_shared_resource_requests);
 
@@ -1233,6 +1257,8 @@ void Document::set_url(URL::URL const& url)
     if (m_url == url)
         return;
 
+    ensure_cookie_version_index(url, m_url);
+
     // To set the URL for a Document document to a URL record url:
 
     // 1. Set document's URL to url.
@@ -1312,6 +1338,63 @@ void Document::invalidate_layout_tree(InvalidateLayoutTreeReason reason)
     tear_down_layout_tree();
 }
 
+void Document::mark_svg_root_as_needing_relayout(Layout::SVGSVGBox& svg_root)
+{
+    m_svg_roots_needing_relayout.set(svg_root);
+}
+
+static void relayout_svg_root(Layout::SVGSVGBox& svg_root)
+{
+    Layout::LayoutState layout_state;
+    layout_state.set_subtree_root(svg_root);
+
+    // Pre-populate the svg_root itself.
+    if (auto const* paintable = svg_root.paintable_box())
+        layout_state.populate_from_paintable(svg_root, *paintable);
+
+    // Pre-populate ancestors outside the subtree:
+    // - SVGGraphicsBox ancestors (up to outer SVG) for get_parent_svg_transform()
+    // - Abspos boxes inside the subtree whose layout is managed by ancestor formatting contexts (not re-laid-out
+    //   during SVG relayout, so their existing paintable state must be preserved)
+    bool found_outer_svg = false;
+    for (auto* ancestor = svg_root.parent(); ancestor; ancestor = ancestor->parent()) {
+        if (!found_outer_svg) {
+            if (auto const* svg_graphics_ancestor = as_if<Layout::SVGGraphicsBox>(*ancestor)) {
+                if (auto const* paintable = svg_graphics_ancestor->paintable_box())
+                    layout_state.populate_from_paintable(*svg_graphics_ancestor, *paintable);
+            }
+            if (is<Layout::SVGSVGBox>(*ancestor))
+                found_outer_svg = true;
+        }
+
+        if (auto const* box = as_if<Layout::Box>(*ancestor)) {
+            // Pre-populate abspos boxes that are inside the SVG subtree but whose containing block is outside it.
+            // These boxes are laid out by ancestor formatting contexts (not during SVG relayout), so we must preserve
+            // their existing paintable state to prevent commit() from destroying their paintables.
+            for (auto const& abspos_child : box->contained_abspos_children()) {
+                if (svg_root.is_inclusive_ancestor_of(abspos_child) && is<Layout::Box>(*abspos_child)) {
+                    auto const& abspos_box = static_cast<Layout::Box const&>(*abspos_child);
+                    if (auto const* abspos_paintable = abspos_box.paintable_box())
+                        layout_state.populate_from_paintable(abspos_box, *abspos_paintable);
+                }
+            }
+        }
+    }
+
+    auto const& svg_state = layout_state.get(svg_root);
+    auto content_width = svg_state.content_width();
+    auto content_height = svg_state.content_height();
+
+    Layout::SVGFormattingContext svg_context(layout_state, Layout::LayoutMode::Normal, svg_root, nullptr);
+    svg_context.run(Layout::AvailableSpace(Layout::AvailableSize::make_definite(content_width), Layout::AvailableSize::make_definite(content_height)));
+    layout_state.commit(svg_root);
+
+    svg_root.for_each_in_inclusive_subtree([](auto& node) {
+        node.reset_needs_layout_update();
+        return TraversalDecision::Continue;
+    });
+}
+
 static void propagate_scrollbar_width_to_viewport(Element& root_element, Layout::Viewport& viewport)
 {
     // https://drafts.csswg.org/css-scrollbars/#scrollbar-width
@@ -1386,12 +1469,29 @@ void Document::update_layout(UpdateLayoutReason reason)
 
     update_style();
 
-    if (m_layout_root && !m_layout_root->needs_layout_update())
+    auto const needs_layout_tree_rebuild = !m_layout_root || needs_layout_tree_update() || child_needs_layout_tree_update() || needs_full_layout_tree_update();
+
+    auto svg_roots_to_relayout = move(m_svg_roots_needing_relayout);
+
+    if (m_layout_root && !m_layout_root->needs_layout_update() && svg_roots_to_relayout.is_empty())
         return;
 
     // NOTE: If this is a document hosting <template> contents, layout is unnecessary.
     if (m_created_for_appropriate_template_contents)
         return;
+
+    // Partial SVG relayout
+    if (!needs_layout_tree_rebuild && !svg_roots_to_relayout.is_empty() && !m_layout_root->needs_layout_update()) {
+        for (auto const& svg_root : svg_roots_to_relayout)
+            relayout_svg_root(*svg_root);
+
+        invalidate_display_list();
+        set_needs_to_resolve_paint_only_properties();
+        set_needs_accumulated_visual_contexts_update(true);
+        update_paint_and_hit_testing_properties_if_needed();
+        m_document->set_needs_display();
+        return;
+    }
 
     // Clear text blocks cache so we rebuild them on the next find action.
     if (m_layout_root)
@@ -1404,7 +1504,7 @@ void Document::update_layout(UpdateLayoutReason reason)
 
     auto timer = Core::ElapsedTimer::start_new(Core::TimerType::Precise);
 
-    if (!m_layout_root || needs_layout_tree_update() || child_needs_layout_tree_update() || needs_full_layout_tree_update()) {
+    if (needs_layout_tree_rebuild) {
         Layout::TreeBuilder tree_builder;
         m_layout_root = as<Layout::Viewport>(*tree_builder.build(*this));
 
@@ -1422,31 +1522,29 @@ void Document::update_layout(UpdateLayoutReason reason)
 
     m_layout_root->for_each_in_inclusive_subtree([&](auto& layout_node) {
         layout_node.recompute_containing_block({});
-        return TraversalDecision::Continue;
-    });
 
-    m_layout_root->for_each_in_inclusive_subtree_of_type<Layout::Box>([&](auto& child) {
-        child.clear_contained_abspos_children();
-        return TraversalDecision::Continue;
-    });
-
-    // Assign each box that establishes a formatting context a list of absolutely positioned children it should take care of during layout
-    m_layout_root->for_each_in_inclusive_subtree_of_type<Layout::Box>([&](auto& child) {
-        if (!child.is_absolutely_positioned())
+        auto* box = as_if<Layout::Box>(layout_node);
+        if (!box)
             return TraversalDecision::Continue;
-        if (auto containing_block = child.containing_block()) {
+
+        box->clear_contained_abspos_children();
+
+        if (!box->is_absolutely_positioned())
+            return TraversalDecision::Continue;
+
+        if (auto containing_block = box->containing_block()) {
             auto closest_box_that_establishes_formatting_context = containing_block;
             while (closest_box_that_establishes_formatting_context) {
                 if (closest_box_that_establishes_formatting_context == m_layout_root)
                     break;
-                if (Layout::FormattingContext::formatting_context_type_created_by_box(*closest_box_that_establishes_formatting_context).has_value()) {
+                if (Layout::FormattingContext::formatting_context_type_created_by_box(*closest_box_that_establishes_formatting_context).has_value())
                     break;
-                }
                 closest_box_that_establishes_formatting_context = closest_box_that_establishes_formatting_context->containing_block();
             }
             VERIFY(closest_box_that_establishes_formatting_context);
-            closest_box_that_establishes_formatting_context->add_contained_abspos_child(child);
+            closest_box_that_establishes_formatting_context->add_contained_abspos_child(*box);
         }
+
         return TraversalDecision::Continue;
     });
 
@@ -1515,7 +1613,7 @@ void Document::update_layout(UpdateLayoutReason reason)
     }
 }
 
-[[nodiscard]] static CSS::RequiredInvalidationAfterStyleChange update_style_recursively(Node& node, CSS::StyleComputer& style_computer, bool needs_inherited_style_update, bool recompute_elements_depending_on_custom_properties)
+[[nodiscard]] static CSS::RequiredInvalidationAfterStyleChange update_style_recursively(Node& node, CSS::StyleComputer& style_computer, bool needs_inherited_style_update, bool recompute_elements_depending_on_custom_properties, bool parent_display_changed)
 {
     bool const needs_full_style_update = node.document().needs_full_style_update();
     CSS::RequiredInvalidationAfterStyleChange invalidation;
@@ -1532,12 +1630,27 @@ void Document::update_layout(UpdateLayoutReason reason)
     CSS::RequiredInvalidationAfterStyleChange node_invalidation;
     if (is<Element>(node)) {
         auto& element = static_cast<Element&>(node);
-        if (needs_full_style_update || node.needs_style_update() || (recompute_elements_depending_on_custom_properties && element.style_uses_var_css_function())) {
+        if (needs_full_style_update || node.needs_style_update() || parent_display_changed || (recompute_elements_depending_on_custom_properties && element.style_uses_var_css_function())) {
             node_invalidation = element.recompute_style(did_change_custom_properties);
         } else if (needs_inherited_style_update) {
             node_invalidation = element.recompute_inherited_style();
         }
         is_display_none = static_cast<Element&>(node).computed_properties()->display().is_none();
+
+        // If this is a slot element and its style changed, mark its assigned
+        // (slotted) nodes as needing a style update. Slotted elements inherit
+        // from their slot in the flat tree, but they are DOM children of the
+        // shadow host, so the normal DOM tree walk won't propagate inherited
+        // style changes to them.
+        if (!node_invalidation.is_none()) {
+            if (auto* slot = as_if<HTML::HTMLSlotElement>(node)) {
+                for (auto const& slottable : slot->assigned_nodes_internal()) {
+                    slottable.visit([](auto const& assigned_node) {
+                        assigned_node->set_needs_style_update(true);
+                    });
+                }
+            }
+        }
     }
     if (node_invalidation.relayout && node.layout_node()) {
         node.layout_node()->set_needs_layout_update(SetNeedsLayoutReason::StyleChange);
@@ -1559,11 +1672,14 @@ void Document::update_layout(UpdateLayoutReason reason)
     }
 
     bool children_need_inherited_style_update = !invalidation.is_none();
-    if (needs_full_style_update || node.child_needs_style_update() || children_need_inherited_style_update || recompute_elements_depending_on_custom_properties) {
+    // NB: When display changes to/from flex/grid/contents, children may need to be blockified or un-blockified.
+    //     This requires a full style recompute, not just inherited style update.
+    bool children_need_full_style_recompute = node_invalidation.rebuild_layout_tree;
+    if (needs_full_style_update || node.child_needs_style_update() || children_need_inherited_style_update || recompute_elements_depending_on_custom_properties || children_need_full_style_recompute) {
         if (node.is_element()) {
             if (auto shadow_root = static_cast<DOM::Element&>(node).shadow_root()) {
                 if (needs_full_style_update || shadow_root->needs_style_update() || shadow_root->child_needs_style_update()) {
-                    auto subtree_invalidation = update_style_recursively(*shadow_root, style_computer, children_need_inherited_style_update, recompute_elements_depending_on_custom_properties);
+                    auto subtree_invalidation = update_style_recursively(*shadow_root, style_computer, children_need_inherited_style_update, recompute_elements_depending_on_custom_properties, children_need_full_style_recompute);
                     if (!is_display_none)
                         invalidation |= subtree_invalidation;
                 }
@@ -1571,8 +1687,8 @@ void Document::update_layout(UpdateLayoutReason reason)
         }
 
         node.for_each_child([&](auto& child) {
-            if (needs_full_style_update || child.needs_style_update() || children_need_inherited_style_update || child.child_needs_style_update() || recompute_elements_depending_on_custom_properties) {
-                auto subtree_invalidation = update_style_recursively(child, style_computer, children_need_inherited_style_update, recompute_elements_depending_on_custom_properties);
+            if (needs_full_style_update || child.needs_style_update() || children_need_inherited_style_update || child.child_needs_style_update() || recompute_elements_depending_on_custom_properties || children_need_full_style_recompute) {
+                auto subtree_invalidation = update_style_recursively(child, style_computer, children_need_inherited_style_update, recompute_elements_depending_on_custom_properties, children_need_full_style_recompute);
                 if (!is_display_none)
                     invalidation |= subtree_invalidation;
             }
@@ -1592,8 +1708,8 @@ void Document::update_style()
 {
     // NOTE: If our parent document needs a relayout, we must do that *first*. This is required as it may cause the
     // viewport to change which will can affect media query evaluation and the value of the `vw` unit.
-    if (navigable()->container() && &navigable()->container()->document() != this)
-        navigable()->container()->document().update_layout(UpdateLayoutReason::ChildDocumentStyleUpdate);
+    if (auto navigable = this->navigable(); navigable && navigable->container() && &navigable->container()->document() != this)
+        navigable->container()->document().update_layout(UpdateLayoutReason::ChildDocumentStyleUpdate);
 
     if (!browsing_context())
         return;
@@ -1604,10 +1720,13 @@ void Document::update_style()
     // style change event. [CSS-Transitions-2]
     m_transition_generation++;
 
-    style_scope().invalidate_style_of_elements_affected_by_has();
-    for_each_shadow_root([&](auto& shadow_root) {
-        shadow_root.style_scope().invalidate_style_of_elements_affected_by_has();
-    });
+    if (m_needs_invalidation_of_elements_affected_by_has) {
+        m_needs_invalidation_of_elements_affected_by_has = false;
+        style_scope().invalidate_style_of_elements_affected_by_has();
+        for_each_shadow_root([&](auto& shadow_root) {
+            shadow_root.style_scope().invalidate_style_of_elements_affected_by_has();
+        });
+    }
 
     if (!m_style_invalidator->has_pending_invalidations() && !needs_full_style_update() && !needs_style_update() && !child_needs_style_update())
         return;
@@ -1628,7 +1747,7 @@ void Document::update_style()
 
     build_registered_properties_cache();
 
-    auto invalidation = update_style_recursively(*this, style_computer(), false, false);
+    auto invalidation = update_style_recursively(*this, style_computer(), false, false, false);
     if (!invalidation.is_none())
         invalidate_display_list();
 
@@ -1638,6 +1757,39 @@ void Document::update_style()
     if (invalidation.rebuild_stacking_context_tree)
         invalidate_stacking_context_tree();
     m_needs_full_style_update = false;
+}
+
+bool Document::element_needs_style_update(AbstractElement const& abstract_element) const
+{
+    // If there are document-level reasons to update style, we can't skip.
+    if (m_needs_full_style_update)
+        return true;
+    if (m_needs_animated_style_update)
+        return true;
+    if (m_needs_invalidation_of_elements_affected_by_has)
+        return true;
+    if (m_style_invalidator->has_pending_invalidations())
+        return true;
+
+    // Check the element itself.
+    if (abstract_element.element().needs_style_update())
+        return true;
+    if (abstract_element.element().entire_subtree_needs_style_update())
+        return true;
+
+    // Walk the inheritance ancestor chain. We use element_to_inherit_style_from()
+    // because style inheritance follows the flat tree (slotted elements inherit
+    // from their assigned slot, not their DOM parent). If any ancestor on the
+    // path has its style marked dirty, the target element's computed style could
+    // change via inherited properties, so we must update.
+    for (auto ancestor = abstract_element.element_to_inherit_style_from(); ancestor.has_value(); ancestor = ancestor->element_to_inherit_style_from()) {
+        if (ancestor->element().needs_style_update())
+            return true;
+        if (ancestor->element().entire_subtree_needs_style_update())
+            return true;
+    }
+
+    return false;
 }
 
 void Document::update_animated_style_if_needed()
@@ -1912,7 +2064,19 @@ void Document::invalidate_style_for_elements_affected_by_pseudo_class_change(CSS
             style_computer.pop_ancestor(static_cast<Element&>(node));
     };
 
-    invalidate_affected_elements_recursively(root);
+    // Seed the ancestor filter with ancestors above the starting node,
+    // so that ancestor-dependent selectors can still be correctly rejected.
+    for (auto* ancestor = old_new_common_ancestor.parent(); ancestor; ancestor = ancestor->parent()) {
+        if (ancestor->is_element())
+            style_computer.push_ancestor(static_cast<Element&>(*ancestor));
+    }
+
+    invalidate_affected_elements_recursively(old_new_common_ancestor);
+
+    for (auto* ancestor = old_new_common_ancestor.parent(); ancestor; ancestor = ancestor->parent()) {
+        if (ancestor->is_element())
+            style_computer.pop_ancestor(static_cast<Element&>(*ancestor));
+    }
 }
 
 void Document::set_hovered_node(GC::Ptr<Node> node)
@@ -2525,6 +2689,8 @@ void Document::set_focused_area(GC::Ptr<Node> node)
     if (new_focused_element)
         new_focused_element->did_receive_focus();
 
+    reset_cursor_blink_cycle();
+
     if (paintable())
         paintable()->set_needs_display();
 
@@ -2541,6 +2707,11 @@ void Document::set_focused_area(GC::Ptr<Node> node)
     }
 
     update_active_element();
+}
+
+Element const* Document::active_element() const
+{
+    return m_active_element ? m_active_element.ptr() : body();
 }
 
 void Document::set_active_element(GC::Ptr<Element> element)
@@ -2739,6 +2910,10 @@ void Document::dispatch_events_for_transition(GC::Ref<CSS::CSSTransition> transi
         case Animations::TimeValue::Type::Milliseconds:
             elapsed_time_output = elapsed_time.value / 1000;
             break;
+        case Animations::TimeValue::Type::Percentage:
+            // FIXME: The spec doesn't specify how to handle this case
+            elapsed_time_output = 0;
+            break;
         }
 
         append_pending_animation_event({
@@ -2838,6 +3013,10 @@ void Document::dispatch_events_for_animation_if_necessary(GC::Ref<Animations::An
         switch (elapsed_time.type) {
         case Animations::TimeValue::Type::Milliseconds:
             elapsed_time_output = elapsed_time.value / 1000;
+            break;
+        case Animations::TimeValue::Type::Percentage:
+            // FIXME: The spec doesn't specify how to handle this case
+            elapsed_time_output = 0;
             break;
         }
 
@@ -3117,7 +3296,8 @@ bool Document::is_completely_loaded() const
 // https://html.spec.whatwg.org/multipage/browsing-the-web.html#completely-finish-loading
 void Document::completely_finish_loading()
 {
-    if (!navigable())
+    auto navigable = this->navigable();
+    if (!navigable)
         return;
 
     ScopeGuard notify_observers = [this] {
@@ -3137,10 +3317,10 @@ void Document::completely_finish_loading()
         m_active_refresh_timer->start();
 
     // 3. Let container be document's browsing context's container.
-    if (!navigable()->container())
+    if (!navigable->container())
         return;
 
-    auto container = GC::make_root(navigable()->container());
+    auto container = GC::make_root(navigable->container());
 
     // 4. If container is an iframe element, then queue an element task on the DOM manipulation task source given container to run the iframe load event steps given container.
     if (container && is<HTML::HTMLIFrameElement>(*container)) {
@@ -3157,7 +3337,7 @@ void Document::completely_finish_loading()
 }
 
 // https://html.spec.whatwg.org/multipage/dom.html#dom-document-cookie
-WebIDL::ExceptionOr<String> Document::cookie(Cookie::Source source)
+WebIDL::ExceptionOr<String> Document::cookie()
 {
     // On getting, if the document is a cookie-averse Document object, then the user agent must return the empty string.
     if (is_cookie_averse())
@@ -3169,11 +3349,23 @@ WebIDL::ExceptionOr<String> Document::cookie(Cookie::Source source)
 
     // Otherwise, the user agent must return the cookie-string for the document's URL for a "non-HTTP" API, decoded using
     // UTF-8 decode without BOM.
-    return page().client().page_did_request_cookie(m_url, source);
+    if (m_cookie_version_index.has_value()) {
+        if (m_cookie_version == page().client().page_did_request_document_cookie_version(*m_cookie_version_index))
+            return m_cookie;
+    }
+
+    auto [cookie_version, cookie] = page().client().page_did_request_cookie(m_url, HTTP::Cookie::Source::NonHttp);
+
+    if (cookie_version.has_value()) {
+        m_cookie_version = *cookie_version;
+        m_cookie = cookie;
+    }
+
+    return cookie;
 }
 
 // https://html.spec.whatwg.org/multipage/dom.html#dom-document-cookie
-WebIDL::ExceptionOr<void> Document::set_cookie(StringView cookie_string, Cookie::Source source)
+WebIDL::ExceptionOr<void> Document::set_cookie(StringView cookie_string)
 {
     // On setting, if the document is a cookie-averse Document object, then the user agent must do nothing.
     if (is_cookie_averse())
@@ -3185,8 +3377,8 @@ WebIDL::ExceptionOr<void> Document::set_cookie(StringView cookie_string, Cookie:
 
     // Otherwise, the user agent must act as it would when receiving a set-cookie-string for the document's URL via a
     // "non-HTTP" API, consisting of the new value encoded as UTF-8.
-    if (auto cookie = Cookie::parse_cookie(url(), cookie_string); cookie.has_value())
-        page().client().page_did_set_cookie(m_url, cookie.value(), source);
+    if (auto cookie = HTTP::Cookie::parse_cookie(url(), cookie_string); cookie.has_value())
+        page().client().page_did_set_cookie(m_url, cookie.value(), HTTP::Cookie::Source::NonHttp);
 
     return {};
 }
@@ -3300,11 +3492,12 @@ bool Document::has_a_style_sheet_that_is_blocking_scripts() const
         return true;
 
     // 2. If document's node navigable is null, then return false.
-    if (!navigable())
+    auto navigable = this->navigable();
+    if (!navigable)
         return false;
 
     // 3. Let containerDocument be document's node navigable's container document.
-    auto container_document = navigable()->container_document();
+    auto container_document = navigable->container_document();
 
     // 4. If containerDocument is non-null and containerDocument's script-blocking style sheet set is not empty, then return true.
     if (container_document && !container_document->m_script_blocking_style_sheet_set.is_empty())
@@ -3445,12 +3638,18 @@ void Document::run_the_resize_steps()
 // https://drafts.csswg.org/cssom-view-1/#document-run-the-scroll-steps
 void Document::run_the_scroll_steps()
 {
+    // AD-HOC: Process auto-scroll ticks before dispatching scroll events. This is tied to the rendering update to
+    //         ensure exactly one auto-scroll tick per frame.
+    if (auto navigable = this->navigable())
+        navigable->event_handler().process_auto_scroll();
+
     // FIXME: 1. For each scrolling box box that was scrolled:
     //        ...
 
     // 2. For each item (target, type) in doc’s pending scroll events, in the order they were added to the list, run
     //    these substeps:
-    for (auto const& [target, type] : m_pending_scroll_events) {
+    auto pending_scroll_events = move(m_pending_scroll_events);
+    for (auto const& [target, type] : pending_scroll_events) {
         // 1. If target is a Document, and type is "scroll" or "scrollend", fire an event named type that bubbles at target.
         if (is<Document>(*target) && (type == HTML::EventNames::scroll || type == HTML::EventNames::scrollend)) {
             auto event = DOM::Event::create(realm(), type);
@@ -3461,13 +3660,14 @@ void Document::run_the_scroll_steps()
         // FIXME: 3. Otherwise, if type is "scrollsnapchanging", then:
         // 4. Otherwise, fire an event named type at target.
         else {
-            auto event = DOM::Event::create(realm(), HTML::EventNames::scroll);
+            auto event = DOM::Event::create(realm(), type);
             target->dispatch_event(event);
         }
     }
 
     // 3. Empty doc’s pending scroll events.
-    m_pending_scroll_events.clear();
+    // AD-HOC: We already emptied the scroll events by moving in step 2. This prevents us from removing new scroll
+    //         events that were added while dispatching the old scroll events.
 }
 
 void Document::add_media_query_list(GC::Ref<CSS::MediaQueryList> media_query_list)
@@ -3562,8 +3762,39 @@ bool Document::has_focus_for_bindings() const
 // https://html.spec.whatwg.org/multipage/interaction.html#has-focus-steps
 bool Document::has_focus() const
 {
-    // FIXME: Implement this algorithm.
-    return true;
+    // 1. If target's node navigable's top-level traversable does not have system focus, then return false.
+    auto navigable = this->navigable();
+    if (!navigable)
+        return false;
+
+    auto traversable = navigable->traversable_navigable();
+    if (!traversable || !traversable->is_focused())
+        return false;
+
+    // 2. Let candidate be target's node navigable's top-level traversable's active document.
+    auto candidate = traversable->active_document();
+
+    // 3. While true:
+    while (candidate) {
+        // 3.1. If candidate is target, then return true.
+        if (candidate == this)
+            return true;
+
+        // 3.2. If the focused area of candidate is a navigable container with a non-null content navigable,
+        //      then set candidate to the active document of that navigable container's content navigable.
+        auto focused_area = candidate->focused_area();
+        if (auto* navigable_container = as_if<HTML::NavigableContainer>(focused_area.ptr())) {
+            if (auto content_navigable = navigable_container->content_navigable()) {
+                candidate = content_navigable->active_document();
+                continue;
+            }
+        }
+
+        // 3.3. Otherwise, return false.
+        return false;
+    }
+
+    return false;
 }
 
 // https://html.spec.whatwg.org/multipage/interaction.html#allow-focus-steps
@@ -4029,9 +4260,17 @@ Vector<GC::Root<HTML::Navigable>> const Document::descendant_navigables() const
 // https://html.spec.whatwg.org/multipage/document-sequences.html#inclusive-descendant-navigables
 Vector<GC::Root<HTML::Navigable>> Document::inclusive_descendant_navigables()
 {
+    // FIXME: The document's node navigable should not be null here. But we currently do not implement the "unload a
+    //        document and its descendants" steps correctly, and the navigable becomes null during unloading. We are
+    //        essentially destroying the document too early. See Document::unload_a_document_and_its_descendants. See:
+    //        https://github.com/LadybirdBrowser/ladybird/issues/7825
+    auto document_node_navigable = navigable();
+    if (!document_node_navigable)
+        return {};
+
     // 1. Let navigables be « document's node navigable ».
     Vector<GC::Root<HTML::Navigable>> navigables;
-    navigables.append(*navigable());
+    navigables.append(*document_node_navigable);
 
     // 2. Extend navigables with document's descendant navigables.
     navigables.extend(descendant_navigables());
@@ -4043,8 +4282,11 @@ Vector<GC::Root<HTML::Navigable>> Document::inclusive_descendant_navigables()
 // https://html.spec.whatwg.org/multipage/document-sequences.html#ancestor-navigables
 Vector<GC::Root<HTML::Navigable>> Document::ancestor_navigables()
 {
-    // NOTE: This isn't in the spec, but if we don't have a navigable, we can't have ancestors either.
-    auto document_node_navigable = this->navigable();
+    // FIXME: The document's node navigable should not be null here. But we currently do not implement the "unload a
+    //        document and its descendants" steps correctly, and the navigable becomes null during unloading. We are
+    //        essentially destroying the document too early. See Document::unload_a_document_and_its_descendants. See:
+    //        https://github.com/LadybirdBrowser/ladybird/issues/7825
+    auto document_node_navigable = navigable();
     if (!document_node_navigable)
         return {};
 
@@ -4075,11 +4317,19 @@ Vector<GC::Root<HTML::Navigable>> const Document::ancestor_navigables() const
 // https://html.spec.whatwg.org/multipage/document-sequences.html#inclusive-ancestor-navigables
 Vector<GC::Root<HTML::Navigable>> Document::inclusive_ancestor_navigables()
 {
+    // FIXME: The document's node navigable should not be null here. But we currently do not implement the "unload a
+    //        document and its descendants" steps correctly, and the navigable becomes null during unloading. We are
+    //        essentially destroying the document too early. See Document::unload_a_document_and_its_descendants. See:
+    //        https://github.com/LadybirdBrowser/ladybird/issues/7825
+    auto document_node_navigable = navigable();
+    if (!document_node_navigable)
+        return {};
+
     // 1. Let navigables be document's ancestor navigables.
     auto navigables = ancestor_navigables();
 
     // 2. Append document's node navigable to navigables.
-    navigables.append(*navigable());
+    navigables.append(*document_node_navigable);
 
     // 3. Return navigables.
     return navigables;
@@ -4146,6 +4396,21 @@ void Document::destroy()
 
     // 2. Abort document.
     abort();
+
+    // AD-HOC: Notify document observers that this document became inactive.
+    //         This allows observers (e.g. HTMLImageElement) to clear resources like
+    //         DocumentLoadEventDelayers that would otherwise block the parent
+    //         document's load event forever.
+    //         Note: did_stop_being_active_document_in_navigable() handles the navigation case,
+    //         but document destruction (e.g. iframe removal) takes a different path.
+    //         The flag ensures we don't fire the callback twice for the same document
+    //         (once from navigation, then again from destruction).
+    if (!m_has_fired_document_became_inactive) {
+        m_has_fired_document_became_inactive = true;
+        notify_each_document_observer([&](auto const& document_observer) {
+            return document_observer.document_became_inactive();
+        });
+    }
 
     // 3. Set document's salvageable state to false.
     m_salvageable = false;
@@ -4500,6 +4765,15 @@ void Document::unload_a_document_and_its_descendants(GC::Ptr<Document> new_docum
 
     Vector<GC::Root<HTML::Navigable>> descendant_navigables;
     for (auto& other_navigable : HTML::all_navigables()) {
+        // AD-HOC: Skip destroyed navigables. When an iframe is removed,
+        //         destroy_the_child_navigable() marks its navigable as destroyed
+        //         synchronously, but removal from all_navigables() happens later
+        //         in an async callback. If we count destroyed navigables here,
+        //         the unload tasks we queue for them can be removed by
+        //         Document::destroy() (which clears tasks for its document),
+        //         causing the spin_until below to wait forever.
+        if (other_navigable->has_been_destroyed())
+            continue;
         if (navigable->is_ancestor_of(*other_navigable))
             descendant_navigables.append(other_navigable);
     }
@@ -4564,9 +4838,12 @@ void Document::did_stop_being_active_document_in_navigable()
 {
     tear_down_layout_tree();
 
-    notify_each_document_observer([&](auto const& document_observer) {
-        return document_observer.document_became_inactive();
-    });
+    if (!m_has_fired_document_became_inactive) {
+        m_has_fired_document_became_inactive = true;
+        notify_each_document_observer([&](auto const& document_observer) {
+            return document_observer.document_became_inactive();
+        });
+    }
 }
 
 void Document::increment_throw_on_dynamic_markup_insertion_counter(Badge<HTML::HTMLParser>)
@@ -4668,8 +4945,9 @@ void Document::make_active()
     }
 
     // 3. Set document's visibility state to document's node navigable's traversable navigable's system visibility state.
-    if (navigable()) {
-        m_visibility_state = navigable()->traversable_navigable()->system_visibility_state();
+    auto navigable = this->navigable();
+    if (navigable) {
+        m_visibility_state = navigable->traversable_navigable()->system_visibility_state();
     }
 
     // TODO: 4. Queue a new VisibilityStateEntry whose visibility state is document's visibility state and whose timestamp is zero.
@@ -4678,7 +4956,7 @@ void Document::make_active()
     HTML::relevant_settings_object(window).execution_ready = true;
 
     if (m_needs_to_call_page_did_load) {
-        navigable()->traversable_navigable()->page().client().page_did_finish_loading(url());
+        navigable->traversable_navigable()->page().client().page_did_finish_loading(url());
         m_needs_to_call_page_did_load = false;
     }
 
@@ -5397,6 +5675,10 @@ void Document::update_animations_and_send_events(double timestamp)
 
             for (auto const& animation : timeline->associated_animations())
                 animation->update();
+
+            auto animations = GC::RootVector { heap(), timeline->associated_animations().values() };
+            for (auto& animation : animations)
+                dispatch_events_for_animation_if_necessary(animation.as_nonnull());
         }
 
         // 2. Remove replaced animations for doc.
@@ -5452,12 +5734,6 @@ void Document::update_animations_and_send_events(double timestamp)
     //    the previous step.
     for (auto const& event : events_to_dispatch)
         event.target->dispatch_event(event.event);
-
-    for (auto& timeline : timelines_to_update) {
-        auto animations_to_dispatch = GC::RootVector { heap(), timeline->associated_animations().values() };
-        for (auto& animation : animations_to_dispatch)
-            dispatch_events_for_animation_if_necessary(animation.as_nonnull());
-    }
 }
 
 // https://www.w3.org/TR/web-animations-1/#remove-replaced-animations
@@ -5524,8 +5800,8 @@ void Document::remove_replaced_animations()
             // - Set removeEvent’s timelineTime attribute to the current time of the timeline with which animation is
             //   associated.
             Animations::AnimationPlaybackEventInit init;
-            init.current_time = animation->current_time().map([](auto const& value) { return value.as_css_numberish(); });
-            init.timeline_time = animation->timeline()->current_time().map([](auto const& value) { return value.as_css_numberish(); });
+            init.current_time = animation->current_time().map([&](auto const& value) { return value.as_css_numberish(realm()); });
+            init.timeline_time = animation->timeline()->current_time().map([&](auto const& value) { return value.as_css_numberish(realm()); });
             auto remove_event = Animations::AnimationPlaybackEvent::create(realm(), HTML::EventNames::remove, init);
 
             // - If animation has a document for timing, then append removeEvent to its document for timing's pending
@@ -5707,6 +5983,17 @@ WebIDL::ExceptionOr<void> Document::set_design_mode(String const& design_mode)
     return {};
 }
 
+static Element* retarget_from_ua_internal_shadow_root(Element& element)
+{
+    auto* result = &element;
+    while (auto shadow_root = result->containing_shadow_root()) {
+        if (!shadow_root->is_user_agent_internal())
+            break;
+        result = shadow_root->host();
+    }
+    return result;
+}
+
 // https://drafts.csswg.org/cssom-view/#dom-document-elementfrompoint
 Element const* Document::element_from_point(double x, double y)
 {
@@ -5724,19 +6011,20 @@ Element const* Document::element_from_point(double x, double y)
 
     // 2. If there is a box in the viewport that would be a target for hit testing at coordinates x,y, when applying the transforms
     //    that apply to the descendants of the viewport, return the associated element and terminate these steps.
-    Optional<Painting::HitTestResult> hit_test_result;
-    if (auto const* paintable_box = this->paintable_box(); paintable_box) {
+    GC::Ptr<Element> hit_element;
+    if (auto const* paintable_box = this->paintable_box()) {
         (void)paintable_box->hit_test(position, Painting::HitTestType::Exact, [&](Painting::HitTestResult result) {
-            auto* dom_node = result.dom_node();
-            if (dom_node && dom_node->is_element()) {
-                hit_test_result = result;
+            if (auto* element = as_if<Element>(result.dom_node())) {
+                hit_element = element;
                 return TraversalDecision::Break;
             }
             return TraversalDecision::Continue;
         });
     }
-    if (hit_test_result.has_value())
-        return static_cast<Element*>(hit_test_result->dom_node());
+    if (hit_element) {
+        // AD-HOC: If element is inside a UA internal shadow root, retarget to the host.
+        return retarget_from_ua_internal_shadow_root(*hit_element);
+    }
 
     // 3. If the document has a root element, return the root element and terminate these steps.
     if (auto const* root_element = document_element())
@@ -5769,8 +6057,13 @@ GC::RootVector<GC::Ref<Element>> Document::elements_from_point(double x, double 
     //    apply to the descendants of the viewport, append the associated element to sequence.
     if (auto const* paintable_box = this->paintable_box()) {
         (void)paintable_box->hit_test(position, Painting::HitTestType::Exact, [&](Painting::HitTestResult result) {
-            if (auto* element = as_if<Element>(result.dom_node()))
-                sequence.append(*element);
+            if (auto* element = as_if<Element>(result.dom_node())) {
+                // AD-HOC: If element is inside a UA internal shadow root, retarget to the host.
+                element = retarget_from_ua_internal_shadow_root(*element);
+                // AD-HOC: Avoid adding duplicates when multiple internal elements retarget to the same host.
+                if (sequence.is_empty() || sequence.last() != element)
+                    sequence.append(*element);
+            }
             return TraversalDecision::Continue;
         });
     }
@@ -6193,18 +6486,6 @@ void Document::unregister_shadow_root(Badge<DOM::ShadowRoot>, DOM::ShadowRoot& s
     m_shadow_roots.remove(shadow_root);
 }
 
-void Document::for_each_shadow_root(Function<void(DOM::ShadowRoot&)>&& callback)
-{
-    for (auto& shadow_root : m_shadow_roots)
-        callback(shadow_root);
-}
-
-void Document::for_each_shadow_root(Function<void(DOM::ShadowRoot&)>&& callback) const
-{
-    for (auto& shadow_root : m_shadow_roots)
-        callback(const_cast<ShadowRoot&>(shadow_root));
-}
-
 bool Document::is_decoded_svg() const
 {
     return page().client().is_svg_page_client();
@@ -6519,7 +6800,10 @@ GC::Ptr<DOM::Position> Document::cursor_position() const
 void Document::reset_cursor_blink_cycle()
 {
     m_cursor_blink_state = true;
-    m_cursor_blink_timer->restart();
+
+    // In testing mode, disable timed blinking so we can deterministically generate display lists.
+    if (!HTML::Window::in_test_mode())
+        m_cursor_blink_timer->restart();
 }
 
 // https://html.spec.whatwg.org/multipage/document-sequences.html#doc-container-document
@@ -6554,17 +6838,16 @@ void Document::set_needs_display(CSSPixelRect const&, InvalidateDisplayList shou
     // FIXME: Ignore updates outside the visible viewport rect.
     //        This requires accounting for fixed-position elements in the input rect, which we don't do yet.
 
+    auto navigable = this->navigable();
+
     // OPTIMIZATION: Ignore set_needs_display() inside navigable containers (i.e frames) with visibility: hidden.
-    if (auto navigable = this->navigable()) {
-        if (navigable->has_inclusive_ancestor_with_visibility_hidden())
-            return;
-    }
+    if (navigable && navigable->has_inclusive_ancestor_with_visibility_hidden())
+        return;
 
     if (should_invalidate_display_list == InvalidateDisplayList::Yes) {
         invalidate_display_list();
     }
 
-    auto navigable = this->navigable();
     if (!navigable)
         return;
 
@@ -6599,19 +6882,8 @@ RefPtr<Painting::DisplayList> Document::cached_display_list() const
 
 RefPtr<Painting::DisplayList> Document::record_display_list(HTML::PaintConfig config)
 {
-    auto update_visual_viewport_transform = [&](Painting::DisplayList& display_list) {
-        auto transform = visual_viewport()->transform();
-        auto matrix = transform.to_matrix();
-        matrix[0, 3] *= display_list.device_pixels_per_css_pixel();
-        matrix[1, 3] *= display_list.device_pixels_per_css_pixel();
-        matrix[2, 3] *= display_list.device_pixels_per_css_pixel();
-        display_list.set_visual_viewport_transform(matrix);
-    };
-
-    if (m_cached_display_list && m_cached_display_list_paint_config == config) {
-        update_visual_viewport_transform(*m_cached_display_list);
+    if (m_cached_display_list && m_cached_display_list_paint_config == config)
         return m_cached_display_list;
-    }
 
     auto display_list = Painting::DisplayList::create(page().client().device_pixels_per_css_pixel());
     Painting::DisplayListRecorder display_list_recorder(display_list);
@@ -6671,7 +6943,6 @@ RefPtr<Painting::DisplayList> Document::record_display_list(HTML::PaintConfig co
     m_cached_display_list = display_list;
     m_cached_display_list_paint_config = config;
 
-    update_visual_viewport_transform(*m_cached_display_list);
     return display_list;
 }
 
@@ -6680,6 +6951,13 @@ Unicode::Segmenter& Document::grapheme_segmenter() const
     if (!m_grapheme_segmenter)
         m_grapheme_segmenter = Unicode::Segmenter::create(Unicode::SegmenterGranularity::Grapheme);
     return *m_grapheme_segmenter;
+}
+
+Unicode::Segmenter& Document::line_segmenter() const
+{
+    if (!m_line_segmenter)
+        m_line_segmenter = Unicode::Segmenter::create(Unicode::SegmenterGranularity::Line);
+    return *m_line_segmenter;
 }
 
 Unicode::Segmenter& Document::word_segmenter() const
@@ -6774,7 +7052,7 @@ void Document::set_onvisibilitychange(WebIDL::CallbackType* value)
 }
 
 // https://drafts.csswg.org/css-view-transitions-1/#dom-document-startviewtransition
-GC::Ptr<ViewTransition::ViewTransition> Document::start_view_transition(ViewTransition::ViewTransitionUpdateCallback update_callback)
+GC::Ptr<ViewTransition::ViewTransition> Document::start_view_transition(GC::Ptr<WebIDL::CallbackType> update_callback)
 {
     // The method steps for startViewTransition(updateCallback) are as follows:
 
@@ -6948,6 +7226,25 @@ String Document::dump_display_list()
     return builder.to_string_without_validation();
 }
 
+String Document::dump_stacking_context_tree()
+{
+    update_layout(UpdateLayoutReason::DumpDisplayList);
+
+    auto* viewport_paintable = paintable();
+    if (!viewport_paintable)
+        return "No paintable"_string;
+
+    viewport_paintable->build_stacking_context_tree_if_needed();
+
+    auto* stacking_context = viewport_paintable->stacking_context();
+    if (!stacking_context)
+        return "No stacking context"_string;
+
+    StringBuilder builder;
+    stacking_context->dump(builder);
+    return builder.to_string_without_validation();
+}
+
 Optional<Vector<CSS::Parser::ComponentValue>> Document::environment_variable_value(CSS::EnvironmentVariable environment_variable, Span<i64> indices) const
 {
     auto invalid = [] {
@@ -7053,6 +7350,21 @@ void Document::build_registered_properties_cache()
                 m_cached_registered_properties_from_css_property_rules.set(property_rule->name(), property_rule->to_registration());
         });
     });
+}
+
+void Document::ensure_cookie_version_index(URL::URL const& new_url, URL::URL const& old_url)
+{
+    auto new_domain = HTTP::Cookie::canonicalize_domain(new_url);
+    if (!new_domain.has_value()) {
+        m_cookie_version_index = {};
+        return;
+    }
+
+    if (m_cookie_version_index.has_value() && *new_domain == HTTP::Cookie::canonicalize_domain(old_url))
+        return;
+
+    page().client().page_did_request_document_cookie_version_index(unique_id(), *new_domain);
+    m_cookie_version_index = {};
 }
 
 GC::Ptr<Element> ElementByIdMap::get(FlyString const& element_id) const

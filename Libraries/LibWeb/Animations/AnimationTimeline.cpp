@@ -44,7 +44,7 @@ NullableCSSNumberish AnimationTimeline::duration_for_bindings() const
     // available time. For a monotonic timeline, there is no upper bound on current time, and timeline duration is
     // unresolved. For a non-monotonic (e.g. scroll) timeline, the duration has a fixed upper bound. In this case, the
     // timeline is a progress-based timeline, and its timeline duration is 100%.
-    return NullableCSSNumberish::from_optional_css_numberish_time(duration());
+    return NullableCSSNumberish::from_optional_css_numberish_time(realm(), duration());
 }
 
 void AnimationTimeline::set_associated_document(GC::Ptr<DOM::Document> document)
@@ -70,6 +70,7 @@ AnimationTimeline::AnimationTimeline(JS::Realm& realm)
 
 void AnimationTimeline::finalize()
 {
+    Base::finalize();
     if (m_associated_document)
         m_associated_document->disassociate_with_timeline(*this);
 }

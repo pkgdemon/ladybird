@@ -217,6 +217,8 @@ Optional<Parser::PropertyAndValue> Parser::parse_css_value_for_properties(Readon
         return parsed.release_value();
     if (auto parsed = parse_for_type(ValueType::Counter); parsed.has_value())
         return parsed.release_value();
+    if (auto parsed = parse_for_type(ValueType::CounterStyle); parsed.has_value())
+        return parsed.release_value();
     if (auto parsed = parse_for_type(ValueType::DashedIdent); parsed.has_value())
         return parsed.release_value();
     if (auto parsed = parse_for_type(ValueType::EasingFunction); parsed.has_value())
@@ -558,6 +560,10 @@ Parser::ParseErrorOr<NonnullRefPtr<StyleValue const>> Parser::parse_css_value(Pr
     case PropertyID::BorderTopRightRadius:
     case PropertyID::BorderBottomRightRadius:
     case PropertyID::BorderBottomLeftRadius:
+    case PropertyID::BorderEndEndRadius:
+    case PropertyID::BorderEndStartRadius:
+    case PropertyID::BorderStartEndRadius:
+    case PropertyID::BorderStartStartRadius:
         return parse_all_as(tokens, [this](auto& tokens) { return parse_border_radius_value(tokens); });
     case PropertyID::BorderRadius:
         return parse_all_as(tokens, [this](auto& tokens) { return parse_border_radius_shorthand_value(tokens); });
@@ -660,6 +666,19 @@ Parser::ParseErrorOr<NonnullRefPtr<StyleValue const>> Parser::parse_css_value(Pr
                 return parse_single_background_size_value(PropertyID::MaskSize, tokens);
             });
         });
+    case PropertyID::OverflowClipMarginBlockEnd:
+    case PropertyID::OverflowClipMarginBlockStart:
+    case PropertyID::OverflowClipMarginBottom:
+    case PropertyID::OverflowClipMarginInlineEnd:
+    case PropertyID::OverflowClipMarginInlineStart:
+    case PropertyID::OverflowClipMarginLeft:
+    case PropertyID::OverflowClipMarginRight:
+    case PropertyID::OverflowClipMarginTop:
+        return parse_all_as(tokens, [this](auto& tokens) { return parse_overflow_clip_margin_value(tokens); });
+    case PropertyID::OverflowClipMargin:
+    case PropertyID::OverflowClipMarginBlock:
+    case PropertyID::OverflowClipMarginInline:
+        return parse_all_as(tokens, [this, property_id](auto& tokens) { return parse_overflow_clip_margin_shorthand(property_id, tokens); });
     case PropertyID::PaintOrder:
         return parse_all_as(tokens, [this](auto& tokens) { return parse_paint_order_value(tokens); });
     case PropertyID::PlaceContent:
@@ -698,6 +717,8 @@ Parser::ParseErrorOr<NonnullRefPtr<StyleValue const>> Parser::parse_css_value(Pr
         return parse_all_as(tokens, [this](auto& tokens) { return parse_shadow_value(tokens, ShadowStyleValue::ShadowType::Text); });
     case PropertyID::TextUnderlinePosition:
         return parse_all_as(tokens, [this](auto& tokens) { return parse_text_underline_position_value(tokens); });
+    case PropertyID::TimelineScope:
+        return parse_all_as(tokens, [this](auto& tokens) { return parse_timeline_scope_value(tokens); });
     case PropertyID::TouchAction:
         return parse_all_as(tokens, [this](auto& tokens) { return parse_touch_action_value(tokens); });
     case PropertyID::TransformOrigin:
@@ -2671,7 +2692,7 @@ RefPtr<StyleValue const> Parser::parse_font_value(TokenStream<ComponentValue>& t
             PropertyID::FontFeatureSettings,
             PropertyID::FontKerning,
             PropertyID::FontLanguageOverride,
-            // FIXME: PropertyID::FontOpticalSizing,
+            PropertyID::FontOpticalSizing,
             // FIXME: PropertyID::FontSizeAdjust,
             PropertyID::FontVariationSettings,
         },
@@ -2689,7 +2710,7 @@ RefPtr<StyleValue const> Parser::parse_font_value(TokenStream<ComponentValue>& t
             property_initial_value(PropertyID::FontFeatureSettings),   // font-feature-settings
             property_initial_value(PropertyID::FontKerning),           // font-kerning,
             property_initial_value(PropertyID::FontLanguageOverride),  // font-language-override
-                                                                       // FIXME: font-optical-sizing,
+            property_initial_value(PropertyID::FontOpticalSizing),     // font-optical-sizing,
                                                                        // FIXME: font-size-adjust,
             property_initial_value(PropertyID::FontVariationSettings), // font-variation-settings
         });
@@ -3744,6 +3765,35 @@ RefPtr<StyleValue const> Parser::parse_math_depth_value(TokenStream<ComponentVal
     return nullptr;
 }
 
+// https://drafts.csswg.org/css-overflow-4/#overflow-clip-margin
+RefPtr<StyleValue const> Parser::parse_overflow_clip_margin_value(TokenStream<ComponentValue>& tokens)
+{
+    // <visual-box> || <length [0,∞]>
+    // FIXME: Implement the <visual-box> part of this.
+
+    if (auto length = parse_length_value(tokens)) {
+        return length.release_nonnull();
+    }
+
+    return nullptr;
+}
+
+RefPtr<StyleValue const> Parser::parse_overflow_clip_margin_shorthand(PropertyID property_id, TokenStream<ComponentValue>& tokens)
+{
+    // <visual-box> || <length [0,∞]>
+    // FIXME: Implement the <visual-box> part of this.
+
+    if (auto value = parse_overflow_clip_margin_value(tokens)) {
+        auto const& longhands = longhands_for_shorthand(property_id);
+        Vector<ValueComparingNonnullRefPtr<StyleValue const>> longhand_values;
+        longhand_values.resize_with_default_value(longhands.size(), value.release_nonnull());
+
+        return ShorthandStyleValue::create(property_id, longhands, longhand_values);
+    }
+
+    return nullptr;
+}
+
 RefPtr<StyleValue const> Parser::parse_paint_order_value(TokenStream<ComponentValue>& tokens)
 {
     if (auto normal = parse_all_as_single_keyword_value(tokens, Keyword::Normal))
@@ -4601,6 +4651,21 @@ RefPtr<StyleValue const> Parser::parse_text_underline_position_value(TokenStream
     return TextUnderlinePositionStyleValue::create(horizontal_value.value_or(TextUnderlinePositionHorizontal::Auto), vertical_value.value_or(TextUnderlinePositionVertical::Auto));
 }
 
+// https://drafts.csswg.org/scroll-animations-1/#propdef-timeline-scope
+RefPtr<StyleValue const> Parser::parse_timeline_scope_value(TokenStream<ComponentValue>& tokens)
+{
+    // none | all | <dashed-ident>#
+    if (auto none = parse_all_as_single_keyword_value(tokens, Keyword::None))
+        return none;
+
+    if (auto all = parse_all_as_single_keyword_value(tokens, Keyword::All))
+        return all;
+
+    return parse_comma_separated_value_list(tokens, [this](TokenStream<ComponentValue>& inner_tokens) {
+        return parse_dashed_ident_value(inner_tokens);
+    });
+}
+
 // https://www.w3.org/TR/pointerevents/#the-touch-action-css-property
 RefPtr<StyleValue const> Parser::parse_touch_action_value(TokenStream<ComponentValue>& tokens)
 {
@@ -5391,9 +5456,8 @@ RefPtr<StyleValue const> Parser::parse_grid_shorthand_value(TokenStream<Componen
             return nullptr;
 
         auto grid_auto_rows = parse_grid_auto_track_sizes(tokens);
-        if (!grid_auto_rows) {
-            grid_auto_rows = GridTrackSizeListStyleValue::create({});
-        }
+        if (grid_auto_rows->as_grid_track_size_list().grid_track_size_list().is_empty())
+            grid_auto_rows = property_initial_value(PropertyID::GridAutoRows);
 
         tokens.discard_whitespace();
         if (!tokens.has_next_token() || !tokens.next_token().is_delim('/'))
@@ -5407,8 +5471,8 @@ RefPtr<StyleValue const> Parser::parse_grid_shorthand_value(TokenStream<Componen
 
         transaction.commit();
         return ShorthandStyleValue::create(PropertyID::Grid,
-            { PropertyID::GridAutoFlow, PropertyID::GridAutoRows, PropertyID::GridTemplateColumns },
-            { grid_auto_flow.release_nonnull(), grid_auto_rows.release_nonnull(), grid_template_columns.release_nonnull() });
+            { PropertyID::GridAutoFlow, PropertyID::GridAutoRows, PropertyID::GridAutoColumns, PropertyID::GridTemplateAreas, PropertyID::GridTemplateRows, PropertyID::GridTemplateColumns },
+            { grid_auto_flow.release_nonnull(), grid_auto_rows.release_nonnull(), property_initial_value(PropertyID::GridAutoColumns), property_initial_value(PropertyID::GridTemplateAreas), property_initial_value(PropertyID::GridTemplateRows), grid_template_columns.release_nonnull() });
     };
 
     // <'grid-template-rows'> / [ auto-flow && dense? ] <'grid-auto-columns'>?
@@ -5431,14 +5495,13 @@ RefPtr<StyleValue const> Parser::parse_grid_shorthand_value(TokenStream<Componen
             return nullptr;
 
         auto grid_auto_columns = parse_grid_auto_track_sizes(tokens);
-        if (!grid_auto_columns) {
-            grid_auto_columns = GridTrackSizeListStyleValue::create({});
-        }
+        if (grid_auto_columns->as_grid_track_size_list().grid_track_size_list().is_empty())
+            grid_auto_columns = property_initial_value(PropertyID::GridAutoColumns);
 
         transaction.commit();
         return ShorthandStyleValue::create(PropertyID::Grid,
-            { PropertyID::GridTemplateRows, PropertyID::GridAutoFlow, PropertyID::GridAutoColumns },
-            { grid_template_rows.release_nonnull(), grid_auto_flow.release_nonnull(), grid_auto_columns.release_nonnull() });
+            { PropertyID::GridAutoFlow, PropertyID::GridAutoRows, PropertyID::GridAutoColumns, PropertyID::GridTemplateAreas, PropertyID::GridTemplateRows, PropertyID::GridTemplateColumns },
+            { grid_auto_flow.release_nonnull(), property_initial_value(PropertyID::GridAutoRows), grid_auto_columns.release_nonnull(), property_initial_value(PropertyID::GridTemplateAreas), grid_template_rows.release_nonnull(), property_initial_value(PropertyID::GridTemplateColumns) });
     };
 
     if (auto grid = parse_shorthand_branch_1()) {

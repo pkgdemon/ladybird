@@ -20,11 +20,18 @@ void WebWorkerClient::did_close_worker()
         on_worker_close();
 }
 
-Messages::WebWorkerClient::DidRequestCookieResponse WebWorkerClient::did_request_cookie(URL::URL url, Cookie::Source source)
+Messages::WebWorkerClient::DidRequestCookieResponse WebWorkerClient::did_request_cookie(URL::URL url, HTTP::Cookie::Source source)
 {
     if (on_request_cookie)
         return on_request_cookie(url, source);
-    return String {};
+    return HTTP::Cookie::VersionedCookie {};
+}
+
+Messages::WebWorkerClient::RequestWorkerAgentResponse WebWorkerClient::request_worker_agent(Web::Bindings::AgentType worker_type)
+{
+    if (on_request_worker_agent)
+        return on_request_worker_agent(worker_type);
+    return IPC::File {};
 }
 
 WebWorkerClient::WebWorkerClient(NonnullOwnPtr<IPC::Transport> transport)

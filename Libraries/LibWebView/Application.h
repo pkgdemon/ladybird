@@ -24,6 +24,7 @@
 #include <LibWeb/CSS/PreferredMotion.h>
 #include <LibWeb/Clipboard/SystemClipboard.h>
 #include <LibWeb/HTML/ActivateTab.h>
+#include <LibWebView/FileDownloader.h>
 #include <LibWebView/Forward.h>
 #include <LibWebView/Options.h>
 #include <LibWebView/Process.h>
@@ -126,6 +127,8 @@ public:
 
     Menu& debug_menu() { return *m_debug_menu; }
 
+    FileDownloader& file_downloader() { return m_file_downloader; }
+
     void apply_view_options(Badge<ViewImplementation>, ViewImplementation&);
 
     ErrorOr<void> toggle_devtools_enabled();
@@ -144,7 +147,7 @@ protected:
     virtual void create_platform_options(BrowserOptions&, RequestServerOptions&, WebContentOptions&) { }
     virtual NonnullOwnPtr<Core::EventLoop> create_platform_event_loop();
 
-    virtual Optional<ByteString> ask_user_for_download_folder() const { return {}; }
+    virtual Optional<ByteString> ask_user_for_download_path([[maybe_unused]] StringView file) const { return {}; }
 
     virtual void on_devtools_enabled() const;
     virtual void on_devtools_disabled() const;
@@ -255,6 +258,8 @@ private:
     StringView m_navigator_compatibility_mode;
 
     Optional<Web::Clipboard::SystemClipboardRepresentation> m_clipboard;
+
+    FileDownloader m_file_downloader;
 
 #if defined(AK_OS_MACOS)
     OwnPtr<MachPortServer> m_mach_port_server;

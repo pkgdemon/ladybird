@@ -83,9 +83,23 @@ struct LayoutState {
         // the constraint is used in that axis instead.
         AvailableSpace available_inner_space_or_constraints_from(AvailableSpace const& outer_space) const;
 
+        void materialize_from_paintable(Painting::PaintableBox const&);
+
         void set_content_offset(CSSPixelPoint new_offset) { offset = new_offset; }
         void set_content_x(CSSPixels x) { offset.set_x(x); }
         void set_content_y(CSSPixels y) { offset.set_y(y); }
+
+        // Offset from ICB (viewport) content edge to this box's content edge.
+        // Computed lazily by walking the containing block chain.
+        // For pre-populated nodes (partial relayout), returns the cached value from paintable absolute position.
+        CSSPixelPoint cumulative_offset() const
+        {
+            if (m_cumulative_offset.has_value())
+                return *m_cumulative_offset;
+            if (m_containing_block_used_values)
+                return m_containing_block_used_values->cumulative_offset() + offset;
+            return offset;
+        }
 
         // offset from top-left corner of content area of box's containing block to top-left corner of box's content area
         CSSPixelPoint offset;
@@ -163,6 +177,8 @@ struct LayoutState {
         }
 
     private:
+        friend struct LayoutState;
+
         AvailableSize available_width_inside() const;
         AvailableSize available_height_inside() const;
 
@@ -175,6 +191,7 @@ struct LayoutState {
 
         GC::Ptr<Layout::NodeWithStyle const> m_node { nullptr };
         UsedValues const* m_containing_block_used_values { nullptr };
+        Optional<CSSPixelPoint> m_cumulative_offset;
 
         CSSPixels m_content_width { 0 };
         CSSPixels m_content_height { 0 };
@@ -201,13 +218,20 @@ struct LayoutState {
     // Commits the used values produced by layout and builds a paintable tree.
     void commit(Box& root);
 
+    void set_subtree_root(NodeWithStyle const& node) { m_subtree_root = &node; }
+
     UsedValues& get_mutable(NodeWithStyle const&);
     UsedValues const& get(NodeWithStyle const&) const;
+
+    UsedValues& populate_from_paintable(NodeWithStyle const&, Painting::PaintableBox const&);
 
     OrderedHashMap<GC::Ref<Layout::Node const>, NonnullOwnPtr<UsedValues>> used_values_per_layout_node;
 
 private:
+    UsedValues& ensure_used_values_for(NodeWithStyle const&);
     void resolve_relative_positions();
+
+    GC::Ptr<Layout::NodeWithStyle const> m_subtree_root;
 };
 
 inline CSSPixels clamp_to_max_dimension_value(CSSPixels value)

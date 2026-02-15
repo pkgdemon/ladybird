@@ -204,7 +204,7 @@ static ErrorOr<CSSPixelPoint, WebDriver::Error> get_coordinates_relative_to_orig
             auto element = TRY(actions_options.get_element_origin(browsing_context, origin));
 
             // 3. Let x element and y element be the result of calculating the in-view center point of element.
-            auto position = in_view_center_point(element, viewport);
+            auto position = TRY(in_view_center_point(element, viewport));
 
             // 4. Let x equal x element + x offset, and y equal y element + y offset.
             return position.translated(offset);
@@ -790,6 +790,8 @@ struct KeyCodeData {
 };
 
 // https://w3c.github.io/webdriver/#dfn-code
+// NOTE: The normalised key values (0xE000-0xE05D) are defined in the keyboard actions table:
+//       https://w3c.github.io/webdriver/#keyboard-actions
 static KeyCodeData key_code_data(u32 code_point)
 {
     // The code for key is the value in the last column of the following table on the row with key in either the first

@@ -6,6 +6,7 @@
  */
 
 #include <LibWeb/Bindings/Intrinsics.h>
+#include <LibWeb/DOM/Document.h>
 #include <LibWeb/Gamepad/EventNames.h>
 #include <LibWeb/Gamepad/Gamepad.h>
 #include <LibWeb/Gamepad/GamepadButton.h>
@@ -160,6 +161,7 @@ void Gamepad::visit_edges(Cell::Visitor& visitor)
 
 void Gamepad::finalize()
 {
+    Base::finalize();
     SDL_CloseGamepad(m_sdl_gamepad);
 }
 

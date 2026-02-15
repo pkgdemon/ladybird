@@ -1,16 +1,15 @@
 /*
  * Copyright (c) 2018-2023, Andreas Kling <andreas@ladybird.org>
+ * Copyright (c) 2026, Jelle Raaijmakers <jelle@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <LibGfx/ImmutableBitmap.h>
-#include <LibWeb/CSS/StyleValues/EdgeStyleValue.h>
-#include <LibWeb/CSS/StyleValues/LengthStyleValue.h>
 #include <LibWeb/CSS/StyleValues/PositionStyleValue.h>
+#include <LibWeb/DOM/Document.h>
 #include <LibWeb/HTML/DecodedImageData.h>
 #include <LibWeb/HTML/HTMLImageElement.h>
-#include <LibWeb/HTML/ImageRequest.h>
 #include <LibWeb/Painting/BorderRadiusCornerClipper.h>
 #include <LibWeb/Painting/DisplayListRecorder.h>
 #include <LibWeb/Painting/ImagePaintable.h>
@@ -169,6 +168,12 @@ void ImagePaintable::paint(DisplayListRecordingContext& context, PaintPhase phas
             };
 
             decoded_image_data->paint(context, m_image_provider.current_frame_index(), draw_rect, image_rect_device_pixels.to_type<int>(), scaling_mode);
+        }
+
+        if (selection_state() != SelectionState::None) {
+            auto selection_background_color = selection_style().background_color;
+            if (selection_background_color.alpha() > 0)
+                context.display_list_recorder().fill_rect(image_rect_device_pixels.to_type<int>(), selection_background_color);
         }
     }
 }

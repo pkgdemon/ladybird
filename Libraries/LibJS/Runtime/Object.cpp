@@ -90,7 +90,7 @@ Object::Object(Shape& shape, MayInterfereWithIndexedPropertyAccess may_interfere
     : m_may_interfere_with_indexed_property_access(may_interfere_with_indexed_property_access == MayInterfereWithIndexedPropertyAccess::Yes)
     , m_shape(&shape)
 {
-    m_storage.resize(shape.property_count());
+    m_storage.resize_with_default_value(shape.property_count(), Value());
 }
 
 Object::~Object()
@@ -99,14 +99,15 @@ Object::~Object()
         s_intrinsics.remove(this);
 }
 
-void Object::initialize(Realm&)
+void Object::initialize(Realm& realm)
 {
+    Base::initialize(realm);
 }
 
 void Object::unsafe_set_shape(Shape& shape)
 {
     m_shape = shape;
-    m_storage.resize(shape.property_count());
+    m_storage.resize_with_default_value(shape.property_count(), Value());
 }
 
 // 7.2 Testing and Comparison Operations, https://tc39.es/ecma262/#sec-testing-and-comparison-operations
@@ -424,7 +425,7 @@ ThrowCompletionOr<GC::RootVector<Value>> Object::enumerable_own_property_names(P
         // NOTE: If the object's shape has been mutated during iteration through own properties
         //       by executing a getter, we can no longer assume that subsequent properties
         //       are still present and enumerable.
-        if (shape().is_cacheable() && &shape() == &pre_iteration_shape) {
+        if (&shape() == &pre_iteration_shape) {
             if (!enumerable)
                 return {};
         } else {
@@ -941,7 +942,7 @@ ThrowCompletionOr<Value> Object::internal_get(PropertyKey const& property_key, V
 
     auto update_inline_cache = [&] {
         // Non-standard: If the caller has requested cacheable metadata and the property is an own property, fill it in.
-        if (!cacheable_metadata || !descriptor->property_offset.has_value() || !shape().is_cacheable())
+        if (!cacheable_metadata || !descriptor->property_offset.has_value())
             return;
         if (phase == PropertyLookupPhase::OwnProperty) {
             *cacheable_metadata = CacheableGetPropertyMetadata {
@@ -1029,7 +1030,7 @@ ThrowCompletionOr<bool> Object::ordinary_set_with_own_descriptor(PropertyKey con
 
     auto update_inline_cache_for_property_change = [&] {
         // Non-standard: If the caller has requested cacheable metadata and the property is an own property, fill it in.
-        if (!cacheable_metadata || !own_descriptor->property_offset.has_value() || !shape().is_cacheable())
+        if (!cacheable_metadata || !own_descriptor->property_offset.has_value())
             return;
         if (phase == PropertyLookupPhase::OwnProperty) {
             *cacheable_metadata = CacheableSetPropertyMetadata {
@@ -1098,7 +1099,7 @@ ThrowCompletionOr<bool> Object::ordinary_set_with_own_descriptor(PropertyKey con
             Optional<u32> new_property_offset;
             auto result = TRY(receiver_object.create_data_property(property_key, value, &new_property_offset));
             auto& receiver_shape = receiver_object.shape();
-            if (cacheable_metadata && new_property_offset.has_value() && !receiver_shape.is_dictionary() && receiver_shape.is_cacheable()) {
+            if (cacheable_metadata && new_property_offset.has_value() && !receiver_shape.is_dictionary()) {
                 VERIFY(!property_key.is_number());
                 *cacheable_metadata = CacheableSetPropertyMetadata {
                     .type = CacheableSetPropertyMetadata::Type::AddOwnProperty,
@@ -1276,7 +1277,7 @@ Optional<u32> Object::storage_set(PropertyKey const& property_key, ValueAndAttri
     if (!metadata.has_value()) {
         static constexpr size_t max_transitions_before_converting_to_dictionary = 64;
         if (!m_shape->is_dictionary() && m_shape->property_count() >= max_transitions_before_converting_to_dictionary)
-            set_shape(m_shape->create_cacheable_dictionary_transition());
+            set_shape(m_shape->create_dictionary_transition());
 
         if (m_shape->is_dictionary())
             m_shape->add_property_without_transition(property_key, attributes);
@@ -1312,10 +1313,7 @@ void Object::storage_delete(PropertyKey const& property_key)
     auto metadata = shape().lookup(property_key);
     VERIFY(metadata.has_value());
 
-    if (m_shape->is_cacheable_dictionary()) {
-        m_shape = m_shape->create_uncacheable_dictionary_transition();
-    }
-    if (m_shape->is_uncacheable_dictionary()) {
+    if (m_shape->is_dictionary()) {
         m_shape->remove_property_without_transition(property_key, metadata->offset);
         m_storage.remove(metadata->offset);
         return;

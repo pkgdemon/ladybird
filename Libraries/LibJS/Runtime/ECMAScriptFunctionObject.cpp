@@ -140,53 +140,14 @@ GC::Ref<ECMAScriptFunctionObject> ECMAScriptFunctionObject::create_from_function
         prototype);
 }
 
-GC::Ref<ECMAScriptFunctionObject> ECMAScriptFunctionObject::create_from_function_node(
-    FunctionNode const& function_node,
-    Utf16FlyString name,
+GC::Ref<ECMAScriptFunctionObject> ECMAScriptFunctionObject::create_from_function_data(
     GC::Ref<Realm> realm,
+    GC::Ref<SharedFunctionInstanceData> shared_data,
     GC::Ptr<Environment> parent_environment,
     GC::Ptr<PrivateEnvironment> private_environment)
 {
-    GC::Ptr<Object> prototype = nullptr;
-    switch (function_node.kind()) {
-    case FunctionKind::Normal:
-        prototype = realm->intrinsics().function_prototype();
-        break;
-    case FunctionKind::Generator:
-        prototype = realm->intrinsics().generator_function_prototype();
-        break;
-    case FunctionKind::Async:
-        prototype = realm->intrinsics().async_function_prototype();
-        break;
-    case FunctionKind::AsyncGenerator:
-        prototype = realm->intrinsics().async_generator_function_prototype();
-        break;
-    }
-
-    auto shared_data = function_node.shared_data();
-
-    if (!shared_data) {
-        shared_data = realm->heap().allocate<SharedFunctionInstanceData>(
-            realm->vm(),
-            function_node.kind(),
-            move(name),
-            function_node.function_length(),
-            function_node.parameters(),
-            *function_node.body_ptr(),
-            function_node.source_text(),
-            function_node.is_strict_mode(),
-            function_node.is_arrow_function(),
-            function_node.parsing_insights(),
-            function_node.local_variables_names());
-        function_node.set_shared_data(shared_data);
-    }
-
-    return create_from_function_data(
-        realm,
-        *shared_data,
-        parent_environment,
-        private_environment,
-        *prototype);
+    auto prototype = prototype_for_function_kind(*realm, shared_data->m_kind);
+    return create_from_function_data(realm, shared_data, parent_environment, private_environment, *prototype);
 }
 
 ECMAScriptFunctionObject::ECMAScriptFunctionObject(
@@ -252,20 +213,20 @@ void ECMAScriptFunctionObject::initialize(Realm& realm)
     }
 }
 
-ThrowCompletionOr<void> ECMAScriptFunctionObject::get_stack_frame_size(size_t& registers_and_locals_count, size_t& constants_count, size_t& argument_count)
+void ECMAScriptFunctionObject::get_stack_frame_size(size_t& registers_and_locals_count, size_t& constants_count, size_t& argument_count)
 {
     auto& executable = shared_data().m_executable;
     if (!executable) {
         if (is_module_wrapper()) {
-            executable = TRY(Bytecode::compile(vm(), ecmascript_code(), kind(), name()));
+            executable = Bytecode::compile(vm(), ecmascript_code(), kind(), name());
         } else {
-            executable = TRY(Bytecode::compile(vm(), shared_data(), Bytecode::BuiltinAbstractOperationsEnabled::No));
+            executable = Bytecode::compile(vm(), shared_data(), Bytecode::BuiltinAbstractOperationsEnabled::No);
         }
+        m_shared_data->clear_compile_inputs();
     }
     registers_and_locals_count = executable->registers_and_locals_count;
     constants_count = executable->constants.size();
-    argument_count = max(argument_count, formal_parameters().size());
-    return {};
+    argument_count = max(argument_count, static_cast<size_t>(formal_parameter_count()));
 }
 
 // 10.2.1 [[Call]] ( thisArgument, argumentsList ), https://tc39.es/ecma262/#sec-ecmascript-function-objects-call-thisargument-argumentslist
@@ -575,11 +536,8 @@ void async_block_start(VM& vm, T const& async_body, PromiseCapability const& pro
         // b. If asyncBody is a Parse Node, then
         if constexpr (!IsSame<T, GC::Function<Completion()>>) {
             // i. Let result be Completion(Evaluation of asyncBody).
-            auto maybe_executable = Bytecode::compile(vm, async_body, FunctionKind::Async, "AsyncBlockStart"_utf16_fly_string);
-            if (maybe_executable.is_error())
-                result = maybe_executable.release_error();
-            else
-                result = vm.bytecode_interpreter().run_executable(vm.running_execution_context(), *maybe_executable.value(), {});
+            auto executable = Bytecode::compile(vm, async_body, FunctionKind::Async, "AsyncBlockStart"_utf16_fly_string);
+            result = vm.bytecode_interpreter().run_executable(vm.running_execution_context(), *executable, {});
         }
         // c. Else,
         else {

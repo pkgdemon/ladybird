@@ -9,16 +9,15 @@
 #include <AK/DistinctNumeric.h>
 #include <AK/FlyString.h>
 #include <AK/GenericShorthands.h>
-#include <AK/JsonObjectSerializer.h>
 #include <AK/TypeCasts.h>
 #include <AK/Vector.h>
 #include <LibWeb/CSS/InvalidationSet.h>
-#include <LibWeb/DOM/AccessibilityTreeNode.h>
 #include <LibWeb/DOM/EventTarget.h>
+#include <LibWeb/DOM/FragmentSerializationMode.h>
 #include <LibWeb/DOM/NodeType.h>
 #include <LibWeb/DOM/Slottable.h>
+#include <LibWeb/DOM/StyleInvalidationReason.h>
 #include <LibWeb/Export.h>
-#include <LibWeb/HTML/XMLSerializer.h>
 #include <LibWeb/TraversalDecision.h>
 #include <LibWeb/TreeNode.h>
 #include <LibWeb/WebIDL/ExceptionOr.h>
@@ -34,11 +33,6 @@ struct GetRootNodeOptions {
     bool composed { false };
 };
 
-enum class FragmentSerializationMode {
-    Inner,
-    Outer,
-};
-
 enum class IsDescendant {
     No,
     Yes,
@@ -47,53 +41,6 @@ enum class IsDescendant {
 enum class ShouldComputeRole {
     No,
     Yes,
-};
-
-#define ENUMERATE_STYLE_INVALIDATION_REASONS(X)     \
-    X(AdoptedStyleSheetsList)                       \
-    X(BaseURLChanged)                               \
-    X(CSSFontLoaded)                                \
-    X(CSSImportRule)                                \
-    X(CSSStylePropertiesRemoveProperty)             \
-    X(CSSStylePropertiesSetProperty)                \
-    X(CSSStylePropertiesSetPropertyStyleValue)      \
-    X(CSSStylePropertiesTextChange)                 \
-    X(CustomElementStateChange)                     \
-    X(CustomStateSetChange)                         \
-    X(DidLoseFocus)                                 \
-    X(DidReceiveFocus)                              \
-    X(EditingInsertion)                             \
-    X(EditingDeletion)                              \
-    X(ElementAttributeChange)                       \
-    X(ElementSetShadowRoot)                         \
-    X(HTMLDialogElementSetIsModal)                  \
-    X(HTMLHyperlinkElementHrefChange)               \
-    X(HTMLIFrameElementGeometryChange)              \
-    X(HTMLInputElementSetChecked)                   \
-    X(HTMLInputElementSetIsOpen)                    \
-    X(HTMLObjectElementUpdateLayoutAndChildObjects) \
-    X(HTMLOptionElementSelectedChange)              \
-    X(HTMLSelectElementSetIsOpen)                   \
-    X(MediaListSetMediaText)                        \
-    X(MediaListAppendMedium)                        \
-    X(MediaListDeleteMedium)                        \
-    X(MediaQueryChangedMatchState)                  \
-    X(NavigableSetViewportSize)                     \
-    X(NodeInsertBefore)                             \
-    X(NodeRemove)                                   \
-    X(NodeSetTextContent)                           \
-    X(Other)                                        \
-    X(SetSelectorText)                              \
-    X(SettingsChange)                               \
-    X(StyleSheetDeleteRule)                         \
-    X(StyleSheetInsertRule)                         \
-    X(StyleSheetListAddSheet)                       \
-    X(StyleSheetListRemoveSheet)
-
-enum class StyleInvalidationReason {
-#define __ENUMERATE_STYLE_INVALIDATION_REASON(reason) reason,
-    ENUMERATE_STYLE_INVALIDATION_REASONS(__ENUMERATE_STYLE_INVALIDATION_REASON)
-#undef __ENUMERATE_STYLE_INVALIDATION_REASON
 };
 
 #define ENUMERATE_SET_NEEDS_LAYOUT_REASONS(X)         \
@@ -107,8 +54,10 @@ enum class StyleInvalidationReason {
     X(KeyframeEffect)                                 \
     X(LayoutTreeUpdate)                               \
     X(NavigableSetViewportSize)                       \
+    X(SVGGraphicsElementTransformChange)              \
     X(SVGImageElementFetchTheDocument)                \
     X(SVGImageFilterFetch)                            \
+    X(SVGViewBoxChange)                               \
     X(StyleChange)
 
 enum class SetNeedsLayoutReason {
@@ -131,8 +80,6 @@ enum class SetNeedsLayoutReason {
     X(NodeRemove)                                         \
     X(NodeSetTextContent)                                 \
     X(None)                                               \
-    X(SVGGraphicsElementTransformChange)                  \
-    X(SVGViewBoxChange)                                   \
     X(StyleChange)
 
 enum class SetNeedsLayoutTreeUpdateReason {
@@ -155,6 +102,10 @@ public:
     Node const* parent_or_shadow_host_node() const;
     Element* parent_or_shadow_host_element();
     Element const* parent_or_shadow_host_element() const { return const_cast<Node*>(this)->parent_or_shadow_host_element(); }
+    ParentNode* flat_tree_parent();
+    ParentNode const* flat_tree_parent() const { return const_cast<Node*>(this)->flat_tree_parent(); }
+    Element* flat_tree_parent_element();
+    Element const* flat_tree_parent_element() const { return const_cast<Node*>(this)->flat_tree_parent_element(); }
 
     virtual ~Node();
 
@@ -327,9 +278,9 @@ public:
     GC::Ptr<Element> parent_element();
     GC::Ptr<Element const> parent_element() const;
 
-    virtual void inserted();
+    MUST_UPCALL virtual void inserted();
     virtual void post_connection();
-    virtual void removed_from(Node* old_parent, Node& old_root);
+    MUST_UPCALL virtual void removed_from(Node* old_parent, Node& old_root);
     virtual void moved_from(GC::Ptr<Node> old_parent);
 
     struct ChildrenChangedMetadata {
@@ -380,9 +331,6 @@ public:
     void set_entire_subtree_needs_style_update(bool b) { m_entire_subtree_needs_style_update = b; }
 
     void invalidate_style(StyleInvalidationReason);
-    struct StyleInvalidationOptions {
-        bool invalidate_self { false };
-    };
     void invalidate_style(StyleInvalidationReason, Vector<CSS::InvalidationSet::Property> const&, StyleInvalidationOptions);
 
     void set_document(Badge<Document>, Document&);
@@ -459,13 +407,13 @@ public:
         return {};
     }
     template<typename U>
-    U const* shadow_including_first_ancestor_of_type() const
+    U const* first_flat_tree_ancestor_of_type() const
     {
-        return const_cast<Node*>(this)->template shadow_including_first_ancestor_of_type<U>();
+        return const_cast<Node*>(this)->template first_flat_tree_ancestor_of_type<U>();
     }
 
     template<typename U>
-    U* shadow_including_first_ancestor_of_type();
+    U* first_flat_tree_ancestor_of_type();
 
     template<typename Predicate>
     requires requires(Predicate& predicate, Node const& node) { { predicate(node) } -> ConvertibleTo<bool>; }

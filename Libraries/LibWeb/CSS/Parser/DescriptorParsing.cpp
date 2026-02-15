@@ -6,7 +6,10 @@
 
 #include <LibWeb/CSS/Parser/ErrorReporter.h>
 #include <LibWeb/CSS/Parser/Parser.h>
+#include <LibWeb/CSS/StyleValues/CounterStyleSystemStyleValue.h>
+#include <LibWeb/CSS/StyleValues/CustomIdentStyleValue.h>
 #include <LibWeb/CSS/StyleValues/FontSourceStyleValue.h>
+#include <LibWeb/CSS/StyleValues/IntegerStyleValue.h>
 #include <LibWeb/CSS/StyleValues/KeywordStyleValue.h>
 #include <LibWeb/CSS/StyleValues/LengthStyleValue.h>
 #include <LibWeb/CSS/StyleValues/PercentageStyleValue.h>
@@ -38,6 +41,10 @@ Parser::ParseErrorOr<NonnullRefPtr<StyleValue const>> Parser::parse_descriptor_v
         component_values.append(token);
     }
 
+    Optional<ComputationContext> computation_context = m_document
+        ? ComputationContext { .length_resolution_context = Length::ResolutionContext::for_document(*m_document) }
+        : Optional<ComputationContext> {};
+
     TokenStream tokens { component_values };
     auto metadata = get_descriptor_metadata(at_rule_id, descriptor_id);
     for (auto const& option : metadata.syntax) {
@@ -60,6 +67,148 @@ Parser::ParseErrorOr<NonnullRefPtr<StyleValue const>> Parser::parse_descriptor_v
             },
             [&](DescriptorMetadata::ValueType value_type) -> RefPtr<StyleValue const> {
                 switch (value_type) {
+                case DescriptorMetadata::ValueType::CounterStyleAdditiveSymbols: {
+                    // [ <integer [0,∞]> && <symbol> ]#
+                    auto additive_tuples = parse_comma_separated_value_list(tokens, [this](auto& tokens) {
+                        return parse_nonnegative_integer_symbol_pair_value(tokens);
+                    });
+
+                    if (!additive_tuples)
+                        return nullptr;
+
+                    // https://drafts.csswg.org/css-counter-styles-3/#counter-style-symbols
+                    // Each entry in the additive-symbols descriptor’s value defines an additive tuple, which consists
+                    // of a counter symbol and an integer weight. Each weight must be a non-negative integer, and the
+                    // additive tuples must be specified in order of strictly descending weight; otherwise, the
+                    // declaration is invalid and must be ignored.
+                    i64 previous_weight = NumericLimits<i64>::max();
+
+                    for (auto const& tuple_style_value : additive_tuples->as_value_list().values()) {
+                        auto const& weight = tuple_style_value->as_value_list().value_at(0, false);
+
+                        i64 resolved_weight;
+
+                        if (weight->is_integer()) {
+                            resolved_weight = weight->as_integer().integer();
+                        } else {
+                            // FIXME: How should we actually handle calc() when we have no document to absolutize against
+                            if (!computation_context.has_value())
+                                return nullptr;
+
+                            resolved_weight = weight->absolutized(computation_context.value())->as_calculated().resolve_integer({}).value();
+                        }
+
+                        if (resolved_weight >= previous_weight)
+                            return nullptr;
+
+                        previous_weight = resolved_weight;
+                    }
+
+                    return additive_tuples;
+                }
+                case DescriptorMetadata::ValueType::CounterStyleSystem: {
+                    // https://drafts.csswg.org/css-counter-styles-3/#counter-style-system
+                    // cyclic | numeric | alphabetic | symbolic | additive | [fixed <integer>?] | [ extends <counter-style-name> ]
+                    auto keyword_value = parse_keyword_value(tokens);
+
+                    if (!keyword_value)
+                        return nullptr;
+
+                    if (auto system = keyword_to_counter_style_system(keyword_value->to_keyword()); system.has_value())
+                        return CounterStyleSystemStyleValue::create(system.release_value());
+
+                    if (keyword_value->to_keyword() == Keyword::Fixed) {
+                        auto integer_value = parse_integer_value(tokens);
+
+                        return CounterStyleSystemStyleValue::create_fixed(integer_value);
+                    }
+
+                    if (keyword_value->to_keyword() == Keyword::Extends) {
+                        auto counter_style_name = parse_counter_style_name(tokens);
+
+                        if (!counter_style_name.has_value())
+                            return nullptr;
+
+                        return CounterStyleSystemStyleValue::create_extends(counter_style_name.release_value());
+                    }
+
+                    return nullptr;
+                }
+                case DescriptorMetadata::ValueType::CounterStyleName: {
+                    auto counter_style_name = parse_counter_style_name(tokens);
+
+                    if (!counter_style_name.has_value())
+                        return nullptr;
+
+                    return CustomIdentStyleValue::create(counter_style_name.release_value());
+                }
+                case DescriptorMetadata::ValueType::CounterStyleNegative: {
+                    // https://drafts.csswg.org/css-counter-styles-3/#counter-style-negative
+                    // <symbol> <symbol>?
+                    auto first_symbol = parse_symbol_value(tokens);
+                    auto second_symbol = parse_symbol_value(tokens);
+
+                    if (!first_symbol)
+                        return nullptr;
+
+                    if (!second_symbol)
+                        return StyleValueList::create({ first_symbol.release_nonnull() }, StyleValueList::Separator::Space);
+
+                    return StyleValueList::create({ first_symbol.release_nonnull(), second_symbol.release_nonnull() }, StyleValueList::Separator::Space, StyleValueList::Collapsible::No);
+                }
+                case DescriptorMetadata::ValueType::CounterStylePad: {
+                    // https://drafts.csswg.org/css-counter-styles-3/#counter-style-pad
+                    // <integer [0,∞]> && <symbol>
+                    return parse_nonnegative_integer_symbol_pair_value(tokens);
+                }
+                case DescriptorMetadata::ValueType::CounterStyleRange: {
+                    // https://drafts.csswg.org/css-counter-styles-3/#counter-style-range
+                    // [ [ <integer> | infinite ]{2} ]# | auto
+                    if (auto value = parse_all_as_single_keyword_value(tokens, Keyword::Auto))
+                        return value;
+
+                    return parse_comma_separated_value_list(tokens, [&](TokenStream<ComponentValue>& tokens) -> RefPtr<StyleValue const> {
+                        auto const parse_value = [&]() -> RefPtr<StyleValue const> {
+                            if (auto keyword_value = parse_keyword_value(tokens); keyword_value && keyword_value->to_keyword() == Keyword::Infinite)
+                                return keyword_value;
+
+                            if (auto integer_value = parse_integer_value(tokens); integer_value)
+                                return integer_value;
+
+                            return nullptr;
+                        };
+
+                        auto const resolve_value = [&](StyleValue const& value, i64 infinite_value) -> Optional<i64> {
+                            if (value.is_integer())
+                                return value.as_integer().integer();
+
+                            if (value.is_keyword() && value.as_keyword().to_keyword() == Keyword::Infinite)
+                                return infinite_value;
+
+                            // FIXME: How should we actually handle calc() when we have no document to absolutize against
+                            if (!computation_context.has_value())
+                                return {};
+
+                            return value.absolutized(computation_context.value())->as_calculated().resolve_integer({}).value();
+                        };
+
+                        auto first_value = parse_value();
+                        auto second_value = parse_value();
+
+                        if (!first_value || !second_value)
+                            return nullptr;
+
+                        // If the lower bound of any range is higher than the upper bound, the entire descriptor is
+                        // invalid and must be ignored.
+                        auto first_int = resolve_value(*first_value, NumericLimits<i64>::min());
+                        auto second_int = resolve_value(*second_value, NumericLimits<i64>::max());
+
+                        if (!first_int.has_value() || !second_int.has_value() || first_int.value() > second_int.value())
+                            return nullptr;
+
+                        return StyleValueList::create({ first_value.release_nonnull(), second_value.release_nonnull() }, StyleValueList::Separator::Space, StyleValueList::Collapsible::No);
+                    });
+                }
                 case DescriptorMetadata::ValueType::CropOrCross: {
                     // crop || cross
                     auto first = parse_keyword_value(tokens);
@@ -201,6 +350,23 @@ Parser::ParseErrorOr<NonnullRefPtr<StyleValue const>> Parser::parse_descriptor_v
                 }
                 case DescriptorMetadata::ValueType::String:
                     return parse_string_value(tokens);
+                case DescriptorMetadata::ValueType::Symbol:
+                    return parse_symbol_value(tokens);
+                case DescriptorMetadata::ValueType::Symbols: {
+                    // <symbol>+
+                    StyleValueVector symbols;
+                    while (tokens.has_next_token()) {
+                        auto symbol = parse_symbol_value(tokens);
+                        if (!symbol)
+                            break;
+                        symbols.append(symbol.release_nonnull());
+                    }
+
+                    if (symbols.is_empty())
+                        return nullptr;
+
+                    return StyleValueList::create(move(symbols), StyleValueList::Separator::Space, StyleValueList::Collapsible::No);
+                }
                 case DescriptorMetadata::ValueType::UnicodeRangeTokens: {
                     return parse_comma_separated_value_list(tokens, [this](auto& tokens) -> RefPtr<StyleValue const> {
                         return parse_unicode_range_value(tokens);

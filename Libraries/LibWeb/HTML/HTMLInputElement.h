@@ -222,6 +222,7 @@ public:
     bool multiple_applies() const;
     bool required_applies() const;
     bool checked_applies() const;
+    static bool checked_applies(TypeAttributeState);
     bool has_selectable_text() const;
 
     bool supports_a_picker() const;
@@ -233,8 +234,9 @@ public:
     Optional<String> selection_direction_binding() { return selection_direction(); }
 
     // ^FormAssociatedTextControlElement
-    virtual void did_edit_text_node() override;
+    virtual void did_edit_text_node(FlyString const& input_type, Optional<Utf16String> const& data) override;
     virtual GC::Ptr<DOM::Text> form_associated_element_to_text_node() override { return m_text_node; }
+    virtual GC::Ptr<DOM::Element> text_control_scroll_container() override { return m_inner_text_element; }
 
     // https://html.spec.whatwg.org/multipage/input.html#has-a-periodic-domain/
     bool has_periodic_domain() const { return type_state() == HTMLInputElement::TypeAttributeState::Time; }
@@ -328,7 +330,7 @@ private:
     void handle_maxlength_attribute();
     WebIDL::ExceptionOr<void> handle_src_attribute(String const& value);
 
-    void user_interaction_did_change_input_value();
+    void user_interaction_did_change_input_value(FlyString const& input_type = {}, Optional<Utf16String> const& data = {});
 
     // https://html.spec.whatwg.org/multipage/input.html#value-sanitization-algorithm
     Utf16String value_sanitization_algorithm(Utf16String const&) const;

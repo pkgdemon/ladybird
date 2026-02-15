@@ -9,7 +9,6 @@
 
 #include <LibGfx/PaintStyle.h>
 #include <LibWeb/CSS/URL.h>
-#include <LibWeb/DOM/Node.h>
 #include <LibWeb/Export.h>
 #include <LibWeb/SVG/AttributeParser.h>
 #include <LibWeb/SVG/SVGAnimatedTransformList.h>
@@ -63,8 +62,6 @@ public:
         return 0;
     }
 
-    Gfx::AffineTransform get_transform() const;
-
     Optional<Painting::PaintStyle> fill_paint_style(SVGPaintContext const&) const;
     Optional<Painting::PaintStyle> stroke_paint_style(SVGPaintContext const&) const;
 
@@ -91,26 +88,12 @@ protected:
 
     Gfx::AffineTransform m_transform = {};
 
+    GC::Ptr<DOM::Element> resolve_url_to_element(CSS::URL const& url) const;
+
     template<typename T>
     GC::Ptr<T> try_resolve_url_to(CSS::URL const& url) const
     {
-        // FIXME: Complete and use the entire URL, not just the fragment.
-        Optional<FlyString> fragment;
-        if (auto fragment_offset = url.url().find_byte_offset('#'); fragment_offset.has_value()) {
-            fragment = MUST(url.url().substring_from_byte_offset_with_shared_superstring(fragment_offset.value() + 1));
-        }
-        if (!fragment.has_value())
-            return {};
-        if (auto node = as_if<T>(document().get_element_by_id(*fragment).ptr()))
-            return *node;
-
-        auto containing_shadow = containing_shadow_root();
-        if (containing_shadow) {
-            if (auto node = as_if<T>(containing_shadow->get_element_by_id(*fragment).ptr()))
-                return *node;
-        }
-
-        return {};
+        return as_if<T>(resolve_url_to_element(url).ptr());
     }
 
 private:

@@ -20,6 +20,7 @@
 #include <LibWeb/Fetch/Infrastructure/FetchAlgorithms.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/MIME.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Requests.h>
+#include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/HTML/DecodedImageData.h>
 #include <LibWeb/HTML/HTMLMediaElement.h>
 #include <LibWeb/HTML/HTMLObjectElement.h>
@@ -121,6 +122,7 @@ bool HTMLObjectElement::is_presentational_hint(FlyString const& name) const
 
 void HTMLObjectElement::apply_presentational_hints(GC::Ref<CSS::CascadedProperties> cascaded_properties) const
 {
+    Base::apply_presentational_hints(cascaded_properties);
     for_each_attribute([&](auto& name, auto& value) {
         if (name == HTML::AttributeNames::align) {
             if (value.equals_ignoring_ascii_case("center"sv))
@@ -356,7 +358,7 @@ void HTMLObjectElement::resource_did_load(Fetch::Infrastructure::Response const&
     // 1. Let the resource type be unknown.
     Optional<MimeSniff::MimeType> resource_type;
 
-    // FIXME: 3. If the user agent is configured to strictly obey Content-Type headers for this resource, and the resource has
+    // FIXME: 2. If the user agent is configured to strictly obey Content-Type headers for this resource, and the resource has
     //           associated Content-Type metadata, then let the resource type be the type specified in the resource's Content-Type
     //           metadata, and jump to the step below labeled handler.
 

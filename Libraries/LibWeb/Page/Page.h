@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include <AK/JsonValue.h>
 #include <LibGC/Root.h>
 #include <LibGC/Weak.h>
 #include <LibGfx/Cursor.h>
@@ -18,6 +19,8 @@
 #include <LibGfx/Rect.h>
 #include <LibGfx/ShareableBitmap.h>
 #include <LibGfx/Size.h>
+#include <LibHTTP/Cookie/Cookie.h>
+#include <LibHTTP/Forward.h>
 #include <LibHTTP/Header.h>
 #include <LibIPC/Forward.h>
 #include <LibRequests/NetworkError.h>
@@ -27,7 +30,6 @@
 #include <LibWeb/CSS/PreferredColorScheme.h>
 #include <LibWeb/CSS/PreferredContrast.h>
 #include <LibWeb/CSS/PreferredMotion.h>
-#include <LibWeb/Cookie/Cookie.h>
 #include <LibWeb/Export.h>
 #include <LibWeb/Forward.h>
 #include <LibWeb/HTML/ActivateTab.h>
@@ -102,6 +104,7 @@ public:
     EventResult handle_mouseleave();
     EventResult handle_mousewheel(DevicePixelPoint, DevicePixelPoint screen_position, unsigned button, unsigned buttons, unsigned modifiers, DevicePixels wheel_delta_x, DevicePixels wheel_delta_y);
     EventResult handle_doubleclick(DevicePixelPoint, DevicePixelPoint screen_position, unsigned button, unsigned buttons, unsigned modifiers);
+    EventResult handle_tripleclick(DevicePixelPoint, DevicePixelPoint screen_position, unsigned button, unsigned buttons, unsigned modifiers);
 
     EventResult handle_drag_and_drop_event(DragEvent::Type, DevicePixelPoint, DevicePixelPoint screen_position, unsigned button, unsigned buttons, unsigned modifiers, Vector<HTML::SelectedFile> files);
     EventResult handle_pinch_event(DevicePixelPoint point, double scale);
@@ -377,12 +380,16 @@ public:
     virtual void page_did_request_set_prompt_text(String const&) { }
     virtual void page_did_request_accept_dialog() { }
     virtual void page_did_request_dismiss_dialog() { }
-    virtual Vector<Web::Cookie::Cookie> page_did_request_all_cookies_webdriver(URL::URL const&) { return {}; }
-    virtual Vector<Web::Cookie::Cookie> page_did_request_all_cookies_cookiestore(URL::URL const&) { return {}; }
-    virtual Optional<Web::Cookie::Cookie> page_did_request_named_cookie(URL::URL const&, String const&) { return {}; }
-    virtual String page_did_request_cookie(URL::URL const&, Cookie::Source) { return {}; }
-    virtual void page_did_set_cookie(URL::URL const&, Cookie::ParsedCookie const&, Cookie::Source) { }
-    virtual void page_did_update_cookie(Web::Cookie::Cookie const&) { }
+    virtual Optional<Core::SharedVersion> page_did_request_document_cookie_version([[maybe_unused]] Core::SharedVersionIndex document_index) { return {}; }
+    virtual void page_did_receive_document_cookie_version_buffer([[maybe_unused]] Core::AnonymousBuffer document_cookie_version_buffer) { }
+    virtual void page_did_request_document_cookie_version_index([[maybe_unused]] UniqueNodeID document_id, [[maybe_unused]] String const& domain) { }
+    virtual void page_did_receive_document_cookie_version_index([[maybe_unused]] UniqueNodeID document_id, [[maybe_unused]] Core::SharedVersionIndex document_index) { }
+    virtual Vector<HTTP::Cookie::Cookie> page_did_request_all_cookies_webdriver(URL::URL const&) { return {}; }
+    virtual Vector<HTTP::Cookie::Cookie> page_did_request_all_cookies_cookiestore(URL::URL const&) { return {}; }
+    virtual Optional<HTTP::Cookie::Cookie> page_did_request_named_cookie(URL::URL const&, String const&) { return {}; }
+    virtual HTTP::Cookie::VersionedCookie page_did_request_cookie(URL::URL const&, HTTP::Cookie::Source) { return {}; }
+    virtual void page_did_set_cookie(URL::URL const&, HTTP::Cookie::ParsedCookie const&, HTTP::Cookie::Source) { }
+    virtual void page_did_update_cookie(HTTP::Cookie::Cookie const&) { }
     virtual void page_did_expire_cookies_with_time_offset(AK::Duration) { }
     virtual Optional<String> page_did_request_storage_item([[maybe_unused]] Web::StorageAPI::StorageEndpointType storage_endpoint, [[maybe_unused]] String const& storage_key, [[maybe_unused]] String const& bottle_key) { return {}; }
     virtual WebView::StorageSetResult page_did_set_storage_item([[maybe_unused]] Web::StorageAPI::StorageEndpointType storage_endpoint, [[maybe_unused]] String const& storage_key, [[maybe_unused]] String const& bottle_key, [[maybe_unused]] String const& value) { return WebView::StorageOperationError::QuotaExceededError; }
@@ -413,6 +420,7 @@ public:
     virtual void page_did_receive_test_variant_metadata(JsonValue) { }
 
     virtual void page_did_set_browser_zoom([[maybe_unused]] double factor) { }
+    virtual void page_did_set_device_pixel_ratio_for_testing([[maybe_unused]] double ratio) { }
 
     virtual void page_did_change_theme_color(Gfx::Color) { }
 

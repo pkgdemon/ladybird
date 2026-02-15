@@ -130,6 +130,8 @@ void WebSocket::initialize(JS::Realm& realm)
 // https://html.spec.whatwg.org/multipage/server-sent-events.html#garbage-collection
 void WebSocket::finalize()
 {
+    Base::finalize();
+
     auto ready_state = this->ready_state();
 
     // If a WebSocket object is garbage collected while its connection is still open, the user agent must start the
@@ -202,7 +204,7 @@ ErrorOr<void> WebSocket::establish_web_socket_connection(URL::URL const& url_rec
 
     auto cookies = ([&] {
         auto& page = Bindings::principal_host_defined_page(HTML::principal_realm(realm()));
-        return page.client().page_did_request_cookie(url_record, Cookie::Source::Http);
+        return page.client().page_did_request_cookie(url_record, HTTP::Cookie::Source::Http).cookie;
     })();
 
     if (!cookies.is_empty()) {

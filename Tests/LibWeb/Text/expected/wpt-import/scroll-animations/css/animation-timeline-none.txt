@@ -1,0 +1,8 @@
+Harness status: OK
+
+Found 2 tests
+
+1 Pass
+1 Fail
+Pass	Animation with animation-timeline:none holds current time at zero
+Fail	Animation with unknown timeline name holds current time at zero

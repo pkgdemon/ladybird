@@ -477,7 +477,15 @@ void EventLoopImplementationMacOS::quit(int exit_code)
 
 void EventLoopImplementationMacOS::wake()
 {
-    CFRunLoopWakeUp(CFRunLoopGetCurrent());
+    CFRunLoopWakeUp(m_impl->run_loop);
+}
+
+void EventLoopImplementationMacOS::deferred_invoke(Function<void()>&& invokee)
+{
+    m_thread_event_queue.deferred_invoke(move(invokee));
+    CFRunLoopSourceSignal(m_impl->deferred_source);
+    if (&m_thread_event_queue != Core::ThreadEventQueue::current_or_null())
+        CFRunLoopWakeUp(m_impl->run_loop);
 }
 
 bool EventLoopImplementationMacOS::was_exit_requested() const

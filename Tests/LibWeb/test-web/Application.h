@@ -22,7 +22,8 @@ public:
 
     virtual void create_platform_arguments(Core::ArgsParser&) override;
     virtual void create_platform_options(WebView::BrowserOptions&, WebView::RequestServerOptions&, WebView::WebContentOptions&) override;
-    virtual bool should_capture_web_content_output() const override;
+    virtual bool should_capture_web_content_output() const override { return true; }
+
     ErrorOr<void> launch_test_fixtures();
 
     static constexpr u8 VERBOSITY_LEVEL_LOG_TEST_OUTPUT = 1;
@@ -37,7 +38,6 @@ public:
 
     ByteString python_executable_path;
 
-    bool dump_failed_ref_tests { false };
     bool dump_gc_graph { false };
 
     bool test_dry_run { false };

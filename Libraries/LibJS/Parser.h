@@ -15,6 +15,7 @@
 #include <LibJS/Export.h>
 #include <LibJS/Lexer.h>
 #include <LibJS/ParserError.h>
+#include <LibJS/ScopeCollector.h>
 #include <LibJS/SourceRange.h>
 #include <LibJS/Token.h>
 #include <initializer_list>
@@ -40,8 +41,6 @@ struct FunctionNodeParseOptions {
         IsConstructor = 1 << 9,
     };
 };
-
-class ScopePusher;
 
 class JS_API Parser {
 public:
@@ -73,8 +72,16 @@ public:
     RefPtr<BindingPattern const> parse_binding_pattern(AllowDuplicates is_var_declaration = AllowDuplicates::No, AllowMemberExpressions allow_member_expressions = AllowMemberExpressions::No);
 
     struct PrimaryExpressionParseResult {
+        PrimaryExpressionParseResult(NonnullRefPtr<Expression const> result, bool should_continue_parsing_as_expression = true, Optional<Position> invalid_object_property_range = {})
+            : result(move(result))
+            , should_continue_parsing_as_expression(should_continue_parsing_as_expression)
+            , invalid_object_property_range(move(invalid_object_property_range))
+        {
+        }
+
         NonnullRefPtr<Expression const> result;
         bool should_continue_parsing_as_expression { true };
+        Optional<Position> invalid_object_property_range;
     };
 
     NonnullRefPtr<Declaration const> parse_declaration();
@@ -157,7 +164,7 @@ public:
     PrimaryExpressionParseResult parse_primary_expression();
     NonnullRefPtr<Expression const> parse_unary_prefixed_expression();
     NonnullRefPtr<RegExpLiteral const> parse_regexp_literal();
-    NonnullRefPtr<ObjectExpression const> parse_object_expression();
+    PrimaryExpressionParseResult parse_object_expression();
     NonnullRefPtr<ArrayExpression const> parse_array_expression();
 
     enum class StringLiteralType {
@@ -189,6 +196,8 @@ public:
 
     Vector<CallExpression::Argument> parse_arguments();
 
+    void run_scope_analysis() { m_scope_collector.analyze(); }
+
     bool has_errors() const { return m_state.errors.size(); }
     Vector<ParserError> const& errors() const { return m_state.errors; }
 
@@ -199,7 +208,7 @@ public:
     static Parser parse_function_body_from_string(ByteString const& body_string, u16 parse_options, NonnullRefPtr<FunctionParameters const>, FunctionKind kind, FunctionParsingInsights&);
 
 private:
-    friend class ScopePusher;
+    friend class ScopeCollector;
 
     void parse_script(Program& program, bool starts_in_strict_mode);
     void parse_module(Program& program);
@@ -291,10 +300,7 @@ private:
         [[nodiscard]] Token const& current_token() const { return lexer.current_token(); }
         bool previous_token_was_period { false };
         Vector<ParserError> errors;
-        ScopePusher* current_scope_pusher { nullptr };
 
-        HashMap<Utf16FlyString, Optional<Position>> labels_in_scope;
-        HashMap<size_t, Position> invalid_property_range_in_object_expression;
         HashTable<Utf16FlyString>* referenced_private_names { nullptr };
 
         bool strict_mode { false };
@@ -319,12 +325,18 @@ private:
 
     [[nodiscard]] NonnullRefPtr<Identifier const> create_identifier_and_register_in_current_scope(SourceRange range, Utf16FlyString string, Optional<DeclarationKind> = {});
 
+    ScopeCollector& scope_collector() { return m_scope_collector_override ? *m_scope_collector_override : m_scope_collector; }
+    ScopeCollector const& scope_collector() const { return m_scope_collector_override ? *m_scope_collector_override : m_scope_collector; }
+
     NonnullRefPtr<SourceCode const> m_source_code;
     Vector<Position> m_rule_starts;
     ParserState m_state;
     Vector<ParserState> m_saved_state;
+    HashMap<Utf16FlyString, Optional<Position>> m_labels_in_scope;
     HashMap<size_t, TokenMemoization> m_token_memoizations;
     Program::Type m_program_type;
+    ScopeCollector m_scope_collector;
+    ScopeCollector* m_scope_collector_override { nullptr };
 };
 
 }

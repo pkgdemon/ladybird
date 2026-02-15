@@ -6,7 +6,6 @@
  */
 
 #include <AK/StringBuilder.h>
-#include <LibJS/AST.h>
 #include <LibJS/Runtime/Completion.h>
 #include <LibJS/Runtime/Error.h>
 #include <LibJS/Runtime/ExecutionContext.h>
@@ -24,15 +23,7 @@ SourceRange const& TracebackFrame::source_range() const
 {
     if (!cached_source_range)
         return dummy_source_range;
-    if (auto* unrealized = cached_source_range->source_range.get_pointer<UnrealizedSourceRange>()) {
-        auto source_range = [&] {
-            if (!unrealized->source_code)
-                return dummy_source_range;
-            return unrealized->realize();
-        }();
-        cached_source_range->source_range = move(source_range);
-    }
-    return cached_source_range->source_range.get<SourceRange>();
+    return cached_source_range->realize_source_range();
 }
 
 GC::Ref<Error> Error::create(Realm& realm)

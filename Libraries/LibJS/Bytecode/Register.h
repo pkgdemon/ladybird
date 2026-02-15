@@ -19,14 +19,7 @@ public:
         return Register(accumulator_index);
     }
 
-    constexpr static u32 saved_return_value_index = 1;
-
-    static constexpr Register saved_return_value()
-    {
-        return Register(saved_return_value_index);
-    }
-
-    static constexpr u32 exception_index = 2;
+    static constexpr u32 exception_index = 1;
 
     static constexpr Register exception()
     {
@@ -35,14 +28,20 @@ public:
 
     static constexpr Register this_value()
     {
-        constexpr u32 this_value_index = 3;
+        constexpr u32 this_value_index = 2;
         return Register(this_value_index);
     }
 
     static constexpr Register return_value()
     {
-        constexpr u32 return_value_index = 4;
+        constexpr u32 return_value_index = 3;
         return Register(return_value_index);
+    }
+
+    static constexpr Register saved_lexical_environment()
+    {
+        constexpr u32 saved_lexical_environment_index = 4;
+        return Register(saved_lexical_environment_index);
     }
 
     static constexpr u32 reserved_register_count = 5;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2025, Tim Flynn <trflynn89@ladybird.org>
+ * Copyright (c) 2022-2026, Tim Flynn <trflynn89@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -54,19 +54,36 @@ static constexpr StringView sql_error(int error_code)
     __ENUMERATE_TYPE(unsigned long long) \
     __ENUMERATE_TYPE(bool)
 
+ErrorOr<NonnullRefPtr<Database>> Database::create_memory_backed()
+{
+    sqlite3* sql_database { nullptr };
+    SQL_TRY(sqlite3_open(":memory:", &sql_database));
+    return create(sql_database);
+}
+
 ErrorOr<NonnullRefPtr<Database>> Database::create(ByteString const& directory, StringView name)
 {
     TRY(Core::Directory::create(directory, Core::Directory::CreateDirectories::Yes));
-    auto database_file = ByteString::formatted("{}/{}.db", directory, name);
-
-    sqlite3* m_database { nullptr };
-    SQL_TRY(sqlite3_open(database_file.characters(), &m_database));
-
-    return adopt_nonnull_ref_or_enomem(new (nothrow) Database(m_database));
+    LexicalPath database_path { ByteString::formatted("{}/{}.db", directory, name) };
+    sqlite3* sql_database { nullptr };
+    SQL_TRY(sqlite3_open(database_path.string().characters(), &sql_database));
+    return create(sql_database, database_path);
 }
 
-Database::Database(sqlite3* database)
-    : m_database(database)
+ErrorOr<NonnullRefPtr<Database>> Database::create(sqlite3* sql_database, Optional<LexicalPath> database_path)
+{
+    auto database = TRY(adopt_nonnull_ref_or_enomem(new (nothrow) Database(sql_database, move(database_path))));
+
+    // Enable the WAL and set the synchronous pragma to normal by default for performance.
+    TRY(database->set_journal_mode_pragma(JournalMode::WriteAheadLog));
+    TRY(database->set_synchronous_pragma(Synchronous::Normal));
+
+    return database;
+}
+
+Database::Database(sqlite3* database, Optional<LexicalPath> database_path)
+    : m_database_path(move(database_path))
+    , m_database(database)
 {
     VERIFY(m_database);
 }
@@ -90,7 +107,7 @@ ErrorOr<StatementID> Database::prepare_statement(StringView statement)
     return statement_id;
 }
 
-void Database::execute_statement(StatementID statement_id, OnResult on_result)
+void Database::execute_statement_internal(StatementID statement_id, OnResult on_result)
 {
     auto* statement = prepared_statement(statement_id);
 
@@ -112,6 +129,12 @@ void Database::execute_statement(StatementID statement_id, OnResult on_result)
             return;
         }
     }
+}
+
+int Database::bound_parameter_count(StatementID statement_id)
+{
+    auto* statement = prepared_statement(statement_id);
+    return sqlite3_bind_parameter_count(statement);
 }
 
 template<typename ValueType>
@@ -147,8 +170,9 @@ ValueType Database::result_column(StatementID statement_id, int column)
     auto* statement = prepared_statement(statement_id);
 
     if constexpr (IsSame<ValueType, String>) {
+        auto length = sqlite3_column_bytes(statement, column);
         auto const* text = reinterpret_cast<char const*>(sqlite3_column_text(statement, column));
-        return MUST(String::from_utf8(StringView { text, strlen(text) }));
+        return MUST(String::from_utf8(StringView { text, static_cast<size_t>(length) }));
     } else if constexpr (IsSame<ValueType, ByteString>) {
         auto length = sqlite3_column_bytes(statement, column);
         auto const* text = sqlite3_column_blob(statement, column);
@@ -170,5 +194,53 @@ ValueType Database::result_column(StatementID statement_id, int column)
     template DATABASE_API type Database::result_column(StatementID, int);
 ENUMERATE_SQL_TYPES
 #undef __ENUMERATE_TYPE
+
+ErrorOr<void> Database::set_journal_mode_pragma(JournalMode journal_mode)
+{
+    auto journal_mode_string = [&]() {
+        switch (journal_mode) {
+        case JournalMode::Delete:
+            return "DELETE"sv;
+        case JournalMode::Truncate:
+            return "TRUNCATE"sv;
+        case JournalMode::Persist:
+            return "PERSIST"sv;
+        case JournalMode::Memory:
+            return "MEMORY"sv;
+        case JournalMode::WriteAheadLog:
+            return "WAL"sv;
+        case JournalMode::Off:
+            return "OFF"sv;
+        }
+        VERIFY_NOT_REACHED();
+    }();
+
+    auto pragma = ByteString::formatted("PRAGMA journal_mode={};", journal_mode_string);
+    SQL_TRY(sqlite3_exec(m_database, pragma.characters(), nullptr, nullptr, nullptr));
+
+    return {};
+}
+
+ErrorOr<void> Database::set_synchronous_pragma(Synchronous synchronous)
+{
+    auto synchronous_string = [&]() {
+        switch (synchronous) {
+        case Synchronous::Off:
+            return "OFF"sv;
+        case Synchronous::Normal:
+            return "NORMAL"sv;
+        case Synchronous::Full:
+            return "FULL"sv;
+        case Synchronous::Extra:
+            return "EXTRA"sv;
+        }
+        VERIFY_NOT_REACHED();
+    }();
+
+    auto pragma = ByteString::formatted("PRAGMA synchronous={};", synchronous_string);
+    SQL_TRY(sqlite3_exec(m_database, pragma.characters(), nullptr, nullptr, nullptr));
+
+    return {};
+}
 
 }

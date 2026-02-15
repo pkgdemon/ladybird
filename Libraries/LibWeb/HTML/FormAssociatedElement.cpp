@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2021, Andreas Kling <andreas@ladybird.org>
- * Copyright (c) 2024, Jelle Raaijmakers <jelle@ladybird.org>
+ * Copyright (c) 2024-2026, Jelle Raaijmakers <jelle@ladybird.org>
  * Copyright (c) 2024, Tim Ledbetter <tim.ledbetter@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
@@ -24,11 +24,13 @@
 #include <LibWeb/HTML/HTMLLegendElement.h>
 #include <LibWeb/HTML/HTMLSelectElement.h>
 #include <LibWeb/HTML/HTMLTextAreaElement.h>
+#include <LibWeb/HTML/Navigable.h>
 #include <LibWeb/HTML/Parser/HTMLParser.h>
 #include <LibWeb/HTML/ValidityState.h>
 #include <LibWeb/Infra/Strings.h>
+#include <LibWeb/Page/EventHandler.h>
 #include <LibWeb/Painting/Paintable.h>
-#include <LibWeb/Selection/Selection.h>
+#include <LibWeb/UIEvents/InputTypes.h>
 
 namespace Web::HTML {
 
@@ -843,7 +845,7 @@ void FormAssociatedTextControlElement::set_the_selection_range(Optional<WebIDL::
     }
 }
 
-void FormAssociatedTextControlElement::handle_insert(Utf16String const& data)
+void FormAssociatedTextControlElement::handle_insert(FlyString const& input_type, Utf16String const& data)
 {
     auto text_node = form_associated_element_to_text_node();
     if (!text_node || !is_mutable())
@@ -862,10 +864,17 @@ void FormAssociatedTextControlElement::handle_insert(Utf16String const& data)
     MUST(set_range_text(data_for_insertion, selection_start, selection_end, Bindings::SelectionMode::End));
 
     text_node->invalidate_style(DOM::StyleInvalidationReason::EditingInsertion);
-    did_edit_text_node();
+
+    // The input event's data attribute is only set for certain input types according to:
+    // https://w3c.github.io/input-events/#overview
+    Optional<Utf16String> data_for_input_event;
+    if (first_is_one_of(input_type, UIEvents::InputTypes::insertText, UIEvents::InputTypes::insertFromPaste))
+        data_for_input_event = data_for_insertion;
+
+    did_edit_text_node(input_type, data_for_input_event);
 }
 
-void FormAssociatedTextControlElement::handle_delete(DeleteDirection direction)
+void FormAssociatedTextControlElement::handle_delete(FlyString const& input_type)
 {
     auto text_node = form_associated_element_to_text_node();
     if (!text_node || !is_mutable())
@@ -875,7 +884,7 @@ void FormAssociatedTextControlElement::handle_delete(DeleteDirection direction)
     auto selection_end = this->selection_end();
 
     if (selection_start == selection_end) {
-        if (direction == DeleteDirection::Backward) {
+        if (input_type == UIEvents::InputTypes::deleteContentBackward) {
             if (auto offset = text_node->grapheme_segmenter().previous_boundary(m_selection_end); offset.has_value())
                 selection_start = *offset;
         } else {
@@ -887,7 +896,7 @@ void FormAssociatedTextControlElement::handle_delete(DeleteDirection direction)
     MUST(set_range_text({}, selection_start, selection_end, Bindings::SelectionMode::End));
 
     text_node->invalidate_style(DOM::StyleInvalidationReason::EditingDeletion);
-    did_edit_text_node();
+    did_edit_text_node(input_type, {});
 }
 
 Optional<Utf16String> FormAssociatedTextControlElement::selected_text_for_stringifier() const
@@ -906,6 +915,22 @@ void FormAssociatedTextControlElement::collapse_selection_to_offset(size_t posit
 {
     m_selection_start = position;
     m_selection_end = position;
+}
+
+void FormAssociatedTextControlElement::scroll_cursor_into_view()
+{
+    auto& element = form_associated_element_to_html_element();
+    element.document().update_layout(DOM::UpdateLayoutReason::ScrollFocusIntoView);
+
+    auto text_node = form_associated_element_to_text_node();
+    if (!text_node)
+        return;
+
+    auto* paintable = text_node->paintable();
+    if (!paintable)
+        return;
+
+    paintable->scroll_ancestor_to_offset_into_view(m_selection_end);
 }
 
 void FormAssociatedTextControlElement::selection_was_changed()
@@ -933,6 +958,11 @@ void FormAssociatedTextControlElement::selection_was_changed()
         text_paintable->set_selection_state(Painting::Paintable::SelectionState::StartAndEnd);
     }
     text_paintable->set_needs_display();
+
+    // AD-HOC: Skip scroll-into-view during mouse selection, since the user controls the viewport.
+    auto navigable = element.document().cached_navigable();
+    if (!(navigable && navigable->event_handler().is_handling_mouse_selection()))
+        scroll_cursor_into_view();
 }
 
 void FormAssociatedTextControlElement::select_all()

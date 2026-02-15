@@ -65,6 +65,7 @@ public:
     void layout_block_level_box(Box const&, BlockContainer const&, CSSPixels& bottom_of_lowest_margin_box, AvailableSpace const&);
 
     void resolve_vertical_box_model_metrics(Box const&, CSSPixels width_of_containing_block);
+    void resolve_horizontal_box_model_metrics(Box const&, CSSPixels width_of_containing_block);
 
     enum class DidIntroduceClearance {
         Yes,
@@ -163,6 +164,11 @@ private:
         void register_block_container_y_position_update_callback(ESCAPING Function<void(CSSPixels)> callback)
         {
             m_block_container_y_position_update_callback = move(callback);
+        }
+
+        void unregister_block_container_y_position_update_callback()
+        {
+            m_block_container_y_position_update_callback = {};
         }
 
         CSSPixels current_collapsed_margin() const

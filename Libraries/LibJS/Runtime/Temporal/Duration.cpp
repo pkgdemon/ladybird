@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/GenericShorthands.h>
 #include <AK/Math.h>
 #include <AK/NumericLimits.h>
 #include <LibJS/Runtime/AbstractOperations.h>
@@ -576,11 +577,9 @@ Unit default_temporal_largest_unit(Duration const& duration)
 // 7.5.18 ToTemporalPartialDurationRecord ( temporalDurationLike ), https://tc39.es/proposal-temporal/#sec-temporal-totemporalpartialdurationrecord
 ThrowCompletionOr<PartialDuration> to_temporal_partial_duration_record(VM& vm, Value temporal_duration_like)
 {
-    // 1. If temporalDurationLike is not an Object, then
-    if (!temporal_duration_like.is_object()) {
-        // a. Throw a TypeError exception.
+    // 1. If temporalDurationLike is not an Object, throw a TypeError exception.
+    if (!temporal_duration_like.is_object())
         return vm.throw_completion<TypeError>(ErrorType::NotAnObject, temporal_duration_like);
-    }
 
     // 2. Let result be a new partial Duration Record with each field set to undefined.
     PartialDuration result {};
@@ -948,10 +947,10 @@ ThrowCompletionOr<NudgeWindow> compute_nudge_window(VM& vm, i8 sign, InternalDur
         end_duration = TRY(adjust_date_duration_record(vm, duration.date, r2));
     }
 
-    // 5. Assert: If sign is 1, r1 ≥ 0 and r1 < r2.
+    // 5. Assert: If sign = 1, r1 ≥ 0 and r1 < r2.
     if (sign == 1)
         VERIFY(r1 >= 0 && r1 < r2);
-    // 6. Assert: If sign is -1, r1 ≤ 0 and r1 > r2.
+    // 6. Assert: If sign = -1, r1 ≤ 0 and r1 > r2.
     else if (sign == -1)
         VERIFY(r1 <= 0 && r1 > r2);
 
@@ -1026,7 +1025,7 @@ ThrowCompletionOr<CalendarNudgeResult> nudge_to_calendar_unit(VM& vm, i8 sign, I
         return {};
     };
 
-    // 5. If sign is 1, then
+    // 5. If sign = 1, then
     if (sign == 1) {
         // a. If startEpochNs ≤ destEpochNs ≤ endEpochNs is false, then
         if (start_epoch_ns > dest_epoch_ns || dest_epoch_ns > end_epoch_ns) {
@@ -1092,8 +1091,10 @@ ThrowCompletionOr<CalendarNudgeResult> nudge_to_calendar_unit(VM& vm, i8 sign, I
     auto total = total_mv.to_double();
 
     // 16. NOTE: The above two steps cannot be implemented directly using floating-point arithmetic. This division can be
-    //     implemented as if expressing the denominator and numerator of total as two time durations, and performing one
-    //     division operation with a floating-point result.
+    //     implemented as if expressing total as the quotient of two time durations (which may not be safe integers),
+    //     performing all other calculations before the division, and finally performing one division operation with a
+    //     floating-point result for total. The division can be implemented in C++ with the __float128 type if the
+    //     compiler supports it, or with software emulation such as in the SoftFP library.
 
     // 17. Assert: 0 ≤ progress ≤ 1.
 
@@ -1524,8 +1525,8 @@ String temporal_duration_to_string(Duration const& duration, Precision precision
     // 10. Let zeroMinutesAndHigher be false.
     auto zero_minutes_and_higher = false;
 
-    // 11. If DefaultTemporalLargestUnit(duration) is SECOND, MILLISECOND, MICROSECOND, or NANOSECOND, set zeroMinutesAndHigher to true.
-    if (auto unit = default_temporal_largest_unit(duration); unit == Unit::Second || unit == Unit::Millisecond || unit == Unit::Microsecond || unit == Unit::Nanosecond)
+    // 11. If DefaultTemporalLargestUnit(duration) is one of SECOND, MILLISECOND, MICROSECOND, or NANOSECOND, set zeroMinutesAndHigher to true.
+    if (first_is_one_of(default_temporal_largest_unit(duration), Unit::Second, Unit::Millisecond, Unit::Microsecond, Unit::Nanosecond))
         zero_minutes_and_higher = true;
 
     // 12. Let secondsDuration be TimeDurationFromComponents(0, 0, duration.[[Seconds]], duration.[[Milliseconds]], duration.[[Microseconds]], duration.[[Nanoseconds]]).

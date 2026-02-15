@@ -17,39 +17,29 @@
 #include <AK/Vector.h>
 #include <AK/WeakPtr.h>
 #include <LibCore/Forward.h>
-#include <LibJS/Console.h>
+#include <LibCore/SharedVersion.h>
 #include <LibJS/Forward.h>
 #include <LibURL/Origin.h>
 #include <LibURL/URL.h>
 #include <LibUnicode/Forward.h>
-#include <LibWeb/CSS/CSSPropertyRule.h>
-#include <LibWeb/CSS/CSSStyleSheet.h>
 #include <LibWeb/CSS/CustomPropertyRegistration.h>
 #include <LibWeb/CSS/EnvironmentVariable.h>
 #include <LibWeb/CSS/StyleScope.h>
-#include <LibWeb/CSS/StyleSheetList.h>
-#include <LibWeb/Cookie/Cookie.h>
 #include <LibWeb/DOM/ParentNode.h>
 #include <LibWeb/DOM/ShadowRoot.h>
+#include <LibWeb/DOM/ViewportClient.h>
 #include <LibWeb/Export.h>
-#include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/HTML/CrossOrigin/OpenerPolicy.h>
 #include <LibWeb/HTML/DocumentReadyState.h>
 #include <LibWeb/HTML/Focus.h>
-#include <LibWeb/HTML/HTMLScriptElement.h>
-#include <LibWeb/HTML/History.h>
 #include <LibWeb/HTML/NavigationType.h>
 #include <LibWeb/HTML/PaintConfig.h>
 #include <LibWeb/HTML/SandboxingFlagSet.h>
-#include <LibWeb/HTML/Scripting/Environments.h>
 #include <LibWeb/HTML/VisibilityState.h>
 #include <LibWeb/InvalidateDisplayList.h>
 #include <LibWeb/ResizeObserver/ResizeObserver.h>
 #include <LibWeb/TrustedTypes/InjectionSink.h>
-#include <LibWeb/ViewTransition/ViewTransition.h>
 #include <LibWeb/WebIDL/ExceptionOr.h>
-#include <LibWeb/WebIDL/ObservableArray.h>
-#include <LibWeb/XPath/XPath.h>
 
 namespace Web::DOM {
 
@@ -75,6 +65,7 @@ enum class InvalidateLayoutTreeReason {
 [[nodiscard]] StringView to_string(InvalidateLayoutTreeReason);
 
 #define ENUMERATE_UPDATE_LAYOUT_REASONS(X)    \
+    X(AutoScrollSelection)                    \
     X(CanvasRenderingContext2DSetFilter)      \
     X(CanvasRenderingContext2DSetFillStyle)   \
     X(CanvasRenderingContext2DSetShadowColor) \
@@ -109,6 +100,7 @@ enum class InvalidateLayoutTreeReason {
     X(EventHandlerHandleMouseMove)            \
     X(EventHandlerHandleMouseUp)              \
     X(EventHandlerHandleMouseWheel)           \
+    X(EventHandlerHandleTripleClick)          \
     X(HTMLElementGetTheTextSteps)             \
     X(HTMLElementOffsetHeight)                \
     X(HTMLElementOffsetLeft)                  \
@@ -130,6 +122,7 @@ enum class InvalidateLayoutTreeReason {
     X(ResolvedCSSStyleDeclarationProperty)    \
     X(SVGDecodedImageDataRender)              \
     X(SVGGraphicsElementGetBBox)              \
+    X(ScrollFocusIntoView)                    \
     X(SourceSetNormalizeSourceDensities)      \
     X(WindowScroll)
 
@@ -219,10 +212,13 @@ public:
 
     GC::Ptr<Selection::Selection> get_selection() const;
 
-    WebIDL::ExceptionOr<String> cookie(Cookie::Source = Cookie::Source::NonHttp);
-    WebIDL::ExceptionOr<void> set_cookie(StringView, Cookie::Source = Cookie::Source::NonHttp);
+    WebIDL::ExceptionOr<String> cookie();
+    WebIDL::ExceptionOr<void> set_cookie(StringView);
     bool is_cookie_averse() const;
     void enable_cookies_on_file_domains(Badge<Internals::Internals>) { m_enable_cookies_on_file_domains = true; }
+
+    void set_cookie_version_index(Core::SharedVersionIndex cookie_version_index) { m_cookie_version_index = cookie_version_index; }
+    void reset_cookie_version() { m_cookie_version = Core::INVALID_SHARED_VERSION; }
 
     String fg_color() const;
     void set_fg_color(String const&);
@@ -364,6 +360,7 @@ public:
     void obtain_theme_color();
 
     void update_style();
+    [[nodiscard]] bool element_needs_style_update(AbstractElement const&) const;
     void update_layout(UpdateLayoutReason);
     void update_paint_and_hit_testing_properties_if_needed();
     void update_animated_style_if_needed();
@@ -459,7 +456,7 @@ public:
 
     void set_editable(bool editable) { m_editable = editable; }
 
-    // // https://html.spec.whatwg.org/multipage/interaction.html#focused-area-of-the-document
+    // https://html.spec.whatwg.org/multipage/interaction.html#focused-area-of-the-document
     GC::Ptr<Node> focused_area() { return m_focused_area; }
     GC::Ptr<Node const> focused_area() const { return m_focused_area; }
     void set_focused_area(GC::Ptr<Node>);
@@ -467,7 +464,7 @@ public:
     HTML::FocusTrigger last_focus_trigger() const { return m_last_focus_trigger; }
     void set_last_focus_trigger(HTML::FocusTrigger trigger) { m_last_focus_trigger = trigger; }
 
-    Element const* active_element() const { return m_active_element ? m_active_element.ptr() : body(); }
+    Element const* active_element() const;
     void set_active_element(GC::Ptr<Element>);
 
     Element const* target_element() const { return m_target_element.ptr(); }
@@ -577,11 +574,6 @@ public:
     GC::Ref<CSS::VisualViewport> visual_viewport();
     [[nodiscard]] CSSPixelRect viewport_rect() const;
 
-    class ViewportClient {
-    public:
-        virtual ~ViewportClient() = default;
-        virtual void did_set_viewport_rect(CSSPixelRect const&) = 0;
-    };
     void register_viewport_client(ViewportClient&);
     void unregister_viewport_client(ViewportClient&);
     void inform_all_viewport_clients_about_the_current_viewport_rect();
@@ -619,6 +611,8 @@ public:
 
     [[nodiscard]] bool needs_full_layout_tree_update() const { return m_needs_full_layout_tree_update; }
     void set_needs_full_layout_tree_update(bool b) { m_needs_full_layout_tree_update = b; }
+
+    void mark_svg_root_as_needing_relayout(Layout::SVGSVGBox&);
 
     void set_needs_to_refresh_scroll_state(bool b);
 
@@ -807,6 +801,8 @@ public:
     void set_needs_to_resolve_paint_only_properties() { m_needs_to_resolve_paint_only_properties = true; }
     void set_needs_animated_style_update() { m_needs_animated_style_update = true; }
 
+    void set_needs_invalidation_of_elements_affected_by_has() { m_needs_invalidation_of_elements_affected_by_has = true; }
+
     void set_needs_accumulated_visual_contexts_update(bool value) { m_needs_accumulated_visual_contexts_update = value; }
     bool needs_accumulated_visual_contexts_update() const { return m_needs_accumulated_visual_contexts_update; }
 
@@ -824,8 +820,19 @@ public:
 
     void register_shadow_root(Badge<DOM::ShadowRoot>, DOM::ShadowRoot&);
     void unregister_shadow_root(Badge<DOM::ShadowRoot>, DOM::ShadowRoot&);
-    void for_each_shadow_root(Function<void(DOM::ShadowRoot&)>&& callback);
-    void for_each_shadow_root(Function<void(DOM::ShadowRoot&)>&& callback) const;
+    template<typename Callback>
+    void for_each_shadow_root(Callback&& callback)
+    {
+        for (auto& shadow_root : m_shadow_roots)
+            callback(shadow_root);
+    }
+
+    template<typename Callback>
+    void for_each_shadow_root(Callback&& callback) const
+    {
+        for (auto& shadow_root : m_shadow_roots)
+            callback(const_cast<ShadowRoot&>(shadow_root));
+    }
 
     void add_an_element_to_the_top_layer(GC::Ref<Element>);
     void request_an_element_to_be_remove_from_the_top_layer(GC::Ref<Element>);
@@ -883,6 +890,7 @@ public:
     void invalidate_display_list();
 
     Unicode::Segmenter& grapheme_segmenter() const;
+    Unicode::Segmenter& line_segmenter() const;
     Unicode::Segmenter& word_segmenter() const;
 
     struct StepsToFireBeforeunloadResult {
@@ -898,7 +906,7 @@ public:
     void set_onvisibilitychange(WebIDL::CallbackType*);
 
     // https://drafts.csswg.org/css-view-transitions-1/#dom-document-startviewtransition
-    GC::Ptr<ViewTransition::ViewTransition> start_view_transition(ViewTransition::ViewTransitionUpdateCallback update_callback);
+    GC::Ptr<ViewTransition::ViewTransition> start_view_transition(GC::Ptr<WebIDL::CallbackType> update_callback);
     // https://drafts.csswg.org/css-view-transitions-1/#perform-pending-transition-operations
     void perform_pending_transition_operations();
     // https://drafts.csswg.org/css-view-transitions-1/#flush-the-update-callback-queue
@@ -918,7 +926,7 @@ public:
 
     GC::Ref<EditingHostManager> editing_host_manager() const { return *m_editing_host_manager; }
 
-    // // https://w3c.github.io/editing/docs/execCommand/#default-single-line-container-name
+    // https://w3c.github.io/editing/docs/execCommand/#default-single-line-container-name
     FlyString const& default_single_line_container_name() const { return m_default_single_line_container_name; }
     void set_default_single_line_container_name(FlyString const& name) { m_default_single_line_container_name = name; }
 
@@ -962,6 +970,7 @@ public:
     auto const& script_blocking_style_sheet_set() const { return m_script_blocking_style_sheet_set; }
 
     String dump_display_list();
+    String dump_stacking_context_tree();
 
     StyleInvalidator& style_invalidator() { return m_style_invalidator; }
 
@@ -1035,6 +1044,8 @@ private:
 
     void build_registered_properties_cache();
 
+    void ensure_cookie_version_index(URL::URL const& new_url, URL::URL const& old_url = {});
+
     GC::Ref<Page> m_page;
     GC::Ptr<CSS::StyleComputer> m_style_computer;
     GC::Ptr<CSS::FontComputer> m_font_computer;
@@ -1063,6 +1074,7 @@ private:
     bool m_active_parser_was_aborted { false };
 
     bool m_has_been_destroyed { false };
+    bool m_has_fired_document_became_inactive { false };
 
     bool m_has_been_browsing_context_associated { false };
 
@@ -1163,6 +1175,8 @@ private:
 
     bool m_needs_full_style_update { false };
     bool m_needs_full_layout_tree_update { false };
+
+    HashTable<GC::Ref<Layout::SVGSVGBox>> m_svg_roots_needing_relayout;
 
     bool m_needs_animated_style_update { false };
 
@@ -1285,6 +1299,7 @@ private:
 
     bool m_needs_to_resolve_paint_only_properties { true };
     bool m_needs_accumulated_visual_contexts_update { false };
+    bool m_needs_invalidation_of_elements_affected_by_has { false };
 
     mutable GC::Ptr<WebIDL::ObservableArray> m_adopted_style_sheets;
 
@@ -1326,12 +1341,17 @@ private:
     // NOTE: This is GC::Weak, not GC::Ptr, on purpose. We don't want the document to keep some old detached navigable alive.
     GC::Weak<HTML::Navigable> m_cached_navigable;
 
+    Core::SharedVersion m_cookie_version { Core::INVALID_SHARED_VERSION };
+    Optional<Core::SharedVersionIndex> m_cookie_version_index;
+    String m_cookie;
+
     bool m_enable_cookies_on_file_domains { false };
 
     Optional<HTML::PaintConfig> m_cached_display_list_paint_config;
     RefPtr<Painting::DisplayList> m_cached_display_list;
 
     mutable OwnPtr<Unicode::Segmenter> m_grapheme_segmenter;
+    mutable OwnPtr<Unicode::Segmenter> m_line_segmenter;
     mutable OwnPtr<Unicode::Segmenter> m_word_segmenter;
 
     GC::Ref<EditingHostManager> m_editing_host_manager;

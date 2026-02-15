@@ -12,8 +12,11 @@
 #include <LibWeb/Bindings/MainThreadVM.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/Geolocation/GeolocationCoordinates.h>
+#include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/HTML/BrowsingContextGroup.h>
 #include <LibWeb/HTML/DocumentState.h>
+#include <LibWeb/HTML/History.h>
+#include <LibWeb/HTML/NavigableContainer.h>
 #include <LibWeb/HTML/Navigation.h>
 #include <LibWeb/HTML/NavigationParams.h>
 #include <LibWeb/HTML/Parser/HTMLParser.h>
@@ -510,8 +513,14 @@ TraversableNavigable::HistoryStepResult TraversableNavigable::apply_the_history_
 
     // 12. For each navigable of changingNavigables, queue a global task on the navigation and traversal task source of navigable's active window to run the steps:
     for (auto& navigable : changing_navigables) {
-        if (!navigable->active_window())
+        // AD-HOC: If the navigable has been destroyed, or has no active window, skip it.
+        //         We must increment completed_change_jobs here rather than relying on the queued
+        //         task, because Document::destroy() removes tasks associated with a document from
+        //         the task queue, which can cause those tasks to never run.
+        if (navigable->has_been_destroyed() || !navigable->active_window()) {
+            completed_change_jobs++;
             continue;
+        }
         queue_global_task(Task::Source::NavigationAndTraversal, *navigable->active_window(), GC::create_function(heap(), [&] {
             // NOTE: This check is not in the spec but we should not continue navigation if navigable has been destroyed.
             if (navigable->has_been_destroyed()) {
@@ -1444,7 +1453,7 @@ void TraversableNavigable::process_screenshot_requests()
             auto bitmap = bitmap_or_error.release_value();
             auto painting_surface = Gfx::PaintingSurface::wrap_bitmap(*bitmap);
             PaintConfig paint_config { .canvas_fill_rect = rect.to_type<int>() };
-            start_display_list_rendering(painting_surface, paint_config, [bitmap, &client] {
+            render_screenshot(painting_surface, paint_config, [bitmap, &client] {
                 client.page_did_take_screenshot(bitmap->to_shareable_bitmap());
             });
         } else {
@@ -1458,7 +1467,7 @@ void TraversableNavigable::process_screenshot_requests()
             auto bitmap = bitmap_or_error.release_value();
             auto painting_surface = Gfx::PaintingSurface::wrap_bitmap(*bitmap);
             PaintConfig paint_config { .paint_overlay = true, .canvas_fill_rect = rect.to_type<int>() };
-            start_display_list_rendering(painting_surface, paint_config, [bitmap, &client] {
+            render_screenshot(painting_surface, paint_config, [bitmap, &client] {
                 client.page_did_take_screenshot(bitmap->to_shareable_bitmap());
             });
         }

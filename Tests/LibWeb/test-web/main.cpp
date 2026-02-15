@@ -226,10 +226,17 @@ static void setup_output_capture_for_view(TestWebView& view)
         view_capture->stdout_notifier->on_activation = [fd, &capture = *view_capture]() {
             char buffer[4096];
             auto nread = read(fd, buffer, sizeof(buffer));
-            if (nread > 0)
-                capture.stdout_buffer.append(StringView { buffer, static_cast<size_t>(nread) });
-            else
+
+            if (nread > 0) {
+                StringView message { buffer, static_cast<size_t>(nread) };
+
+                if (Application::the().verbosity >= Application::VERBOSITY_LEVEL_LOG_TEST_OUTPUT)
+                    (void)Core::System::write(STDOUT_FILENO, message.bytes());
+
+                capture.stdout_buffer.append(message);
+            } else {
                 capture.stdout_notifier->set_enabled(false);
+            }
         };
     }
 
@@ -239,10 +246,17 @@ static void setup_output_capture_for_view(TestWebView& view)
         view_capture->stderr_notifier->on_activation = [fd, &capture = *view_capture]() {
             char buffer[4096];
             auto nread = read(fd, buffer, sizeof(buffer));
-            if (nread > 0)
-                capture.stderr_buffer.append(StringView { buffer, static_cast<size_t>(nread) });
-            else
+
+            if (nread > 0) {
+                StringView message { buffer, static_cast<size_t>(nread) };
+
+                if (Application::the().verbosity >= Application::VERBOSITY_LEVEL_LOG_TEST_OUTPUT)
+                    (void)Core::System::write(STDERR_FILENO, message.bytes());
+
+                capture.stderr_buffer.append(message);
+            } else {
                 capture.stderr_notifier->set_enabled(false);
+            }
         };
     }
 
@@ -252,8 +266,6 @@ static void setup_output_capture_for_view(TestWebView& view)
 static ErrorOr<void> write_output_for_test(Test const& test, ViewOutputCapture& capture)
 {
     auto& app = Application::the();
-    if (app.verbosity >= Application::VERBOSITY_LEVEL_LOG_TEST_OUTPUT)
-        return {};
 
     // Create the directory structure for this test's output
     auto output_dir = LexicalPath::join(app.results_directory, LexicalPath::dirname(test.safe_relative_path)).string();
@@ -448,8 +460,6 @@ static ByteString test_mode_to_string(TestMode mode)
 static ErrorOr<void> generate_result_files(ReadonlySpan<Test> tests, ReadonlySpan<TestCompletion> non_passing_tests)
 {
     auto& app = Application::the();
-    if (app.verbosity >= Application::VERBOSITY_LEVEL_LOG_TEST_OUTPUT)
-        return {};
 
     // Count results
     size_t fail_count = 0;
@@ -524,8 +534,6 @@ static ErrorOr<void> generate_result_files(ReadonlySpan<Test> tests, ReadonlySpa
 static ErrorOr<void> write_test_diff_to_results(Test const& test, ByteBuffer const& expectation)
 {
     auto& app = Application::the();
-    if (app.verbosity >= Application::VERBOSITY_LEVEL_LOG_TEST_OUTPUT)
-        return {};
 
     // Create the directory structure
     auto output_dir = LexicalPath::join(app.results_directory, LexicalPath::dirname(test.safe_relative_path)).string();
@@ -853,25 +861,12 @@ static void run_ref_test(TestWebView& view, TestRunContext& context, Test& test,
             return {};
         };
 
-        if (app.verbosity < Application::VERBOSITY_LEVEL_LOG_TEST_OUTPUT) {
-            auto output_dir = LexicalPath::join(app.results_directory, LexicalPath::dirname(test.safe_relative_path)).string();
-            TRY(Core::Directory::create(output_dir, Core::Directory::CreateDirectories::Yes));
+        auto output_dir = LexicalPath::join(app.results_directory, LexicalPath::dirname(test.safe_relative_path)).string();
+        TRY(Core::Directory::create(output_dir, Core::Directory::CreateDirectories::Yes));
 
-            auto base_path = LexicalPath::join(app.results_directory, test.safe_relative_path).string();
-            TRY(dump_screenshot(*test.actual_screenshot, ByteString::formatted("{}.actual.png", base_path)));
-            TRY(dump_screenshot(*test.expectation_screenshot, ByteString::formatted("{}.expected.png", base_path)));
-        } else if (app.dump_failed_ref_tests) {
-            warnln("\033[33;1mRef test {} failed; dumping screenshots\033[0m", test.relative_path);
-
-            TRY(Core::Directory::create("test-dumps"sv, Core::Directory::CreateDirectories::Yes));
-
-            auto title = LexicalPath::title(URL::percent_decode(url.serialize_path()));
-            TRY(dump_screenshot(*test.actual_screenshot, ByteString::formatted("test-dumps/{}.png", title)));
-            TRY(dump_screenshot(*test.expectation_screenshot, ByteString::formatted("test-dumps/{}-ref.png", title)));
-
-            outln("\033[33;1mDumped test-dumps/{}.png\033[0m", title);
-            outln("\033[33;1mDumped test-dumps/{}-ref.png\033[0m", title);
-        }
+        auto base_path = LexicalPath::join(app.results_directory, test.safe_relative_path).string();
+        TRY(dump_screenshot(*test.actual_screenshot, ByteString::formatted("{}.actual.png", base_path)));
+        TRY(dump_screenshot(*test.expectation_screenshot, ByteString::formatted("{}.expected.png", base_path)));
 
         return TestResult::Fail;
     };
@@ -1304,8 +1299,9 @@ static ErrorOr<int> run_tests(Core::AnonymousBuffer const& theme, Web::DevicePix
                     s_view_display_states[view_id].start_time = test.start_time;
                 }
                 render_live_display();
+            } else if (app.verbosity >= Application::VERBOSITY_LEVEL_LOG_TEST_DURATION) {
+                outln("[{:{}}] {:{}}/{}:  Start {}", view_id, digits_for_view_id, test.index + 1, digits_for_test_id, tests.size(), test.relative_path);
             } else {
-                // Non-TTY mode: print each test as it starts
                 outln("{}/{}: {}", test.index + 1, tests.size(), test.relative_path);
             }
 
@@ -1446,15 +1442,18 @@ static ErrorOr<int> run_tests(Core::AnonymousBuffer const& theme, Web::DevicePix
 
     if (app.dump_gc_graph) {
         for (auto& view : views) {
-            if (auto path = view->dump_gc_graph(); path.is_error())
+            if (auto path = view->dump_gc_graph(); path.is_error()) {
                 warnln("Failed to dump GC graph: {}", path.error());
-            else
+            } else {
                 outln("GC graph dumped to {}", path.value());
+                auto source_root = LexicalPath(app.test_root_path).parent().parent().string();
+                outln("GC graph explorer: file://{}/Meta/gc-heap-explorer.html?script=file://{}", source_root, path.value());
+            }
         }
     }
 
     // Generate result files (JSON data and HTML index)
-    if (app.verbosity < Application::VERBOSITY_LEVEL_LOG_TEST_OUTPUT) {
+    if (app.verbosity < Application::VERBOSITY_LEVEL_LOG_TEST_OUTPUT || !non_passing_tests.is_empty()) {
         if (auto result = generate_result_files(tests, non_passing_tests); result.is_error())
             warnln("Failed to generate result files: {}", result.error());
         else

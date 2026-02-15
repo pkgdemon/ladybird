@@ -98,7 +98,7 @@ void paint_background(DisplayListRecordingContext& context, PaintableBox const& 
         display_list_recorder.save();
         auto display_list = compute_text_clip_paths(context, paintable_box, resolved_background.background_rect.location());
         auto rect = context.rounded_device_rect(resolved_background.background_rect);
-        display_list_recorder.add_mask(move(display_list), rect.to_type<int>());
+        display_list_recorder.add_mask(move(display_list), rect.to_type<int>(), Gfx::MaskKind::Alpha);
     }
 
     BackgroundBox border_box {
@@ -361,7 +361,7 @@ ResolvedBackground resolve_background_layers(Vector<CSS::BackgroundLayerData> co
         }
         auto concrete_image_size = CSS::run_default_sizing_algorithm(
             specified_width, specified_height,
-            image.natural_width(), image.natural_height(), image.natural_aspect_ratio(),
+            { image.natural_width(), image.natural_height(), image.natural_aspect_ratio() },
             background_positioning_area.size());
 
         // If any of these are zero, the NaNs will pop up in the painting code.

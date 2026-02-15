@@ -8,6 +8,9 @@
 
 #include <AK/Concepts.h>
 #include <AK/Forward.h>
+#include <AK/HashTable.h>
+#include <AK/NonnullRefPtr.h>
+#include <AK/Utf16FlyString.h>
 #include <LibCrypto/Forward.h>
 #include <LibGC/RootVector.h>
 #include <LibJS/Export.h>
@@ -24,6 +27,8 @@
 #include <LibJS/Runtime/Value.h>
 
 namespace JS {
+
+class FunctionDeclaration;
 
 GC::Ref<DeclarativeEnvironment> new_declarative_environment(Environment&);
 JS_API GC::Ref<ObjectEnvironment> new_object_environment(Object&, bool is_with_environment, Environment*);
@@ -45,7 +50,7 @@ bool is_compatible_property_descriptor(bool extensible, PropertyDescriptor&, Opt
 bool validate_and_apply_property_descriptor(Object*, PropertyKey const&, bool extensible, PropertyDescriptor&, Optional<PropertyDescriptor> const& current);
 JS_API ThrowCompletionOr<Object*> get_prototype_from_constructor(VM&, FunctionObject const& constructor, GC::Ref<Object> (Intrinsics::*intrinsic_default_prototype)());
 Object* create_unmapped_arguments_object(VM&, ReadonlySpan<Value> arguments);
-Object* create_mapped_arguments_object(VM&, FunctionObject&, NonnullRefPtr<FunctionParameters const> const&, ReadonlySpan<Value> arguments, Environment&);
+Object* create_mapped_arguments_object(VM&, FunctionObject&, ReadonlySpan<Utf16FlyString> parameter_names, ReadonlySpan<Value> arguments, Environment&);
 
 // 2.1.1 DisposeCapability Records, https://tc39.es/proposal-explicit-resource-management/#sec-disposecapability-records
 struct JS_API DisposeCapability {
@@ -88,7 +93,30 @@ enum class CallerMode {
 
 ThrowCompletionOr<Value> perform_eval(VM&, Value, CallerMode, EvalMode);
 
-ThrowCompletionOr<void> eval_declaration_instantiation(VM& vm, Program const& program, Environment* variable_environment, Environment* lexical_environment, PrivateEnvironment* private_environment, bool strict);
+struct EvalDeclarationData {
+    Vector<Utf16FlyString> var_names;
+
+    struct FunctionToInitialize {
+        GC::Ref<SharedFunctionInstanceData> shared_data;
+        Utf16FlyString name;
+    };
+    Vector<FunctionToInitialize> functions_to_initialize;
+    HashTable<Utf16FlyString> declared_function_names;
+
+    Vector<Utf16FlyString> var_scoped_names;
+
+    Vector<NonnullRefPtr<FunctionDeclaration>> annex_b_candidates;
+
+    struct LexicalBinding {
+        Utf16FlyString name;
+        bool is_constant { false };
+    };
+    Vector<LexicalBinding> lexical_bindings;
+
+    static EvalDeclarationData create(VM&, Program const&, bool strict);
+};
+
+ThrowCompletionOr<void> eval_declaration_instantiation(VM& vm, EvalDeclarationData&, Environment* variable_environment, Environment* lexical_environment, PrivateEnvironment* private_environment, bool strict);
 
 // 7.3.14 Call ( F, V [ , argumentsList ] ), https://tc39.es/ecma262/#sec-call
 ALWAYS_INLINE ThrowCompletionOr<Value> call(VM& vm, Value function, Value this_value, ReadonlySpan<Value> arguments_list)

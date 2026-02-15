@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2021-2023, Linus Groh <linusg@serenityos.org>
  * Copyright (c) 2021, Luke Wilde <lukew@serenityos.org>
- * Copyright (c) 2024-2025, Tim Flynn <trflynn89@ladybird.org>
+ * Copyright (c) 2024-2026, Tim Flynn <trflynn89@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -209,11 +209,9 @@ JS_DEFINE_NATIVE_FUNCTION(PlainTimePrototype::round)
     // 2. Perform ? RequireInternalSlot(plainTime, [[InitializedTemporalTime]]).
     auto plain_time = TRY(typed_this_object(vm));
 
-    // 3. If roundTo is undefined, then
-    if (round_to_value.is_undefined()) {
-        // a. Throw a TypeError exception.
+    // 3. If roundTo is undefined, throw a TypeError exception.
+    if (round_to_value.is_undefined())
         return vm.throw_completion<TypeError>(ErrorType::TemporalMissingOptionsObject);
-    }
 
     GC::Ptr<Object> round_to;
 
@@ -324,7 +322,7 @@ JS_DEFINE_NATIVE_FUNCTION(PlainTimePrototype::to_string)
 }
 
 // 4.3.17 Temporal.PlainTime.prototype.toLocaleString ( [ locales [ , options ] ] ), https://tc39.es/proposal-temporal/#sec-temporal.plaintime.prototype.tolocalestring
-// 15.12.6.1 Temporal.PlainTime.prototype.toLocaleString ( [ locales [ , options ] ] ), https://tc39.es/proposal-temporal/#sup-temporal.plaintime.prototype.tolocalestring
+// 15.11.6.1 Temporal.PlainTime.prototype.toLocaleString ( [ locales [ , options ] ] ), https://tc39.es/proposal-temporal/#sup-temporal.plaintime.prototype.tolocalestring
 JS_DEFINE_NATIVE_FUNCTION(PlainTimePrototype::to_locale_string)
 {
     auto& realm = *vm.current_realm();

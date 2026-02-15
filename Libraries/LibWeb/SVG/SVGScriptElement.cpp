@@ -6,8 +6,10 @@
  */
 
 #include <LibWeb/Bindings/SVGScriptElementPrototype.h>
+#include <LibWeb/DOM/Document.h>
 #include <LibWeb/Fetch/Fetching/Fetching.h>
 #include <LibWeb/Fetch/Infrastructure/FetchAlgorithms.h>
+#include <LibWeb/Fetch/Infrastructure/HTTP/Requests.h>
 #include <LibWeb/Fetch/Infrastructure/HTTP/Responses.h>
 #include <LibWeb/HTML/Scripting/ClassicScript.h>
 #include <LibWeb/MimeSniff/MimeType.h>
@@ -69,6 +71,10 @@ void SVGScriptElement::process_the_script_element()
     // 1. If the 'script' element's "already processed" flag is true or if the element is not in the
     //    document tree, then no action is performed and these steps are ended.
     if (m_already_processed || !in_a_document_tree())
+        return;
+
+    // https://html.spec.whatwg.org/multipage/webappapis.html#enabling-and-disabling-scripting
+    if (is_scripting_disabled())
         return;
 
     // https://svgwg.org/svg2-draft/interact.html#ScriptElement

@@ -8,6 +8,7 @@ set(SOURCES
     DirIterator.cpp
     Environment.cpp
     File.cpp
+    MappedFile.cpp
     SocketAddress.cpp
     StandardPaths.cpp
     Version.cpp
@@ -46,13 +47,13 @@ set(SOURCES
     EventLoop.cpp
     EventLoopImplementation.cpp
     EventReceiver.cpp
-    MappedFile.cpp
     MimeData.cpp
     Notifier.cpp
     ReportTime.cpp
     Resource.cpp
     ResourceImplementation.cpp
     ResourceImplementationFile.cpp
+    SharedVersion.cpp
     SystemServerTakeover.cpp
     ThreadEventQueue.cpp
     Timer.cpp

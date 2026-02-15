@@ -22,30 +22,30 @@ jobs:
           rm -rf "${{ github.workspace }}/*"
 
       - name: Checkout LadybirdBrowser/ladybird
-        uses: actions/checkout@v6.0.1
+        uses: actions/checkout@v6.0.2
         with:
           persist-credentials: false
 
       - name: Checkout LadybirdBrowser/libjs-test262
-        uses: actions/checkout@v6.0.1
+        uses: actions/checkout@v6.0.2
         with:
           repository: LadybirdBrowser/libjs-test262
           path: libjs-test262
 
       - name: Checkout LadybirdBrowser/libjs-data
-        uses: actions/checkout@v6.0.1
+        uses: actions/checkout@v6.0.2
         with:
           repository: LadybirdBrowser/libjs-data
           path: libjs-data
 
       - name: Checkout tc39/test262
-        uses: actions/checkout@v6.0.1
+        uses: actions/checkout@v6.0.2
         with:
           repository: tc39/test262
           path: test262
 
       - name: Checkout tc39/test262-parser-tests
-        uses: actions/checkout@v6.0.1
+        uses: actions/checkout@v6.0.2
         with:
           repository: tc39/test262-parser-tests
           path: test262-parser-tests
@@ -53,7 +53,17 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y ninja-build unzip clang-20 clang++-20 cmake jq curl zip tar autoconf autoconf-archive automake nasm pkg-config libgl1-mesa-dev rsync libtool
+          sudo apt-get install -y ninja-build unzip clang-20 clang++-20 jq curl zip tar autoconf autoconf-archive automake nasm pkg-config libgl1-mesa-dev rsync libtool
+
+          # We are currently limited to CMake 3.28 in Ubuntu 24.04. Our build requires CMake 3.30 or later.
+          CMAKE_VERSION=4.2.3
+          CMAKE_NAME="cmake-${CMAKE_VERSION}-linux-x86_64"
+          test -e ${CMAKE_NAME} || (
+            curl -f -L -o "${CMAKE_NAME}.tar.gz" "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/${CMAKE_NAME}.tar.gz"
+            tar -xzf "./${CMAKE_NAME}.tar.gz"
+            rm "./${CMAKE_NAME}.tar.gz"
+            echo "${{ github.workspace }}/${CMAKE_NAME}/bin" >> $GITHUB_PATH
+          )
 
           WASM_TOOLS_VERSION=1.243.0
           test -e /opt/wasm-tools-${WASM_TOOLS_VERSION} || (
@@ -66,6 +76,10 @@ jobs:
 
           # FIXME: Just use the setup action
           ./Toolchain/BuildVcpkg.py --ci
+
+      - name: Print CMake version
+        run: |
+          cmake --version
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -97,6 +111,7 @@ jobs:
           #        Running as a normal user would make this a non-issue though
           export HOME=${{ github.workspace }}/home
           mkdir -p $HOME
+
           env CC=clang-20 \
             CXX=clang++-20 \
             cmake --preset Release -B libjs-test262/Build \

@@ -5,10 +5,13 @@
  */
 
 #include <LibWeb/Animations/KeyframeEffect.h>
+#include <LibWeb/Animations/ScrollTimeline.h>
 #include <LibWeb/Bindings/CSSAnimationPrototype.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/CSS/CSSAnimation.h>
+#include <LibWeb/CSS/PropertyID.h>
 #include <LibWeb/DOM/Element.h>
+#include <LibWeb/HTML/Scripting/TemporaryExecutionContext.h>
 
 namespace Web::CSS {
 
@@ -60,6 +63,72 @@ Animations::AnimationClass CSSAnimation::animation_class() const
     if (owning_element().has_value())
         return Animations::AnimationClass::CSSAnimationWithOwningElement;
     return Animations::AnimationClass::CSSAnimationWithoutOwningElement;
+}
+
+// NB: Unrelated style changes shouldn't cause us to recreate anonymous timelines, to achieve this we drop updates
+//     between two equivalent anonymous timelines.
+static bool should_update_timeline(GC::Ptr<Animations::AnimationTimeline> old_timeline, GC::Ptr<Animations::AnimationTimeline> new_timeline)
+{
+    if (!old_timeline || !new_timeline)
+        return true;
+
+    if (is<Animations::ScrollTimeline>(*old_timeline) && is<Animations::ScrollTimeline>(*new_timeline)) {
+        auto const& old_scroll_timeline = as<Animations::ScrollTimeline>(*old_timeline);
+        auto const& new_scroll_timeline = as<Animations::ScrollTimeline>(*new_timeline);
+
+        if (!old_scroll_timeline.source_internal().has<Animations::ScrollTimeline::AnonymousSource>() || !new_scroll_timeline.source_internal().has<Animations::ScrollTimeline::AnonymousSource>())
+            return true;
+
+        return old_scroll_timeline.source_internal().get<Animations::ScrollTimeline::AnonymousSource>() != new_scroll_timeline.source_internal().get<Animations::ScrollTimeline::AnonymousSource>();
+    }
+
+    return true;
+}
+
+void CSSAnimation::apply_css_properties(ComputedProperties::AnimationProperties const& animation_properties)
+{
+    // FIXME: Don't apply overriden properties as defined here: https://drafts.csswg.org/css-animations-2/#animations
+
+    VERIFY(effect());
+
+    auto& effect = as<Animations::KeyframeEffect>(*this->effect());
+
+    if (!m_ignored_css_properties.contains(PropertyID::AnimationTimeline) && should_update_timeline(timeline(), animation_properties.timeline)) {
+        HTML::TemporaryExecutionContext context(realm());
+        set_timeline(animation_properties.timeline);
+    }
+
+    effect.set_specified_iteration_duration(animation_properties.duration);
+    effect.set_specified_start_delay(animation_properties.delay);
+    effect.set_iteration_count(animation_properties.iteration_count);
+    // https://drafts.csswg.org/web-animations-2/#updating-animationeffect-timing
+    // Timing properties may also be updated due to a style change. Any change to a CSS animation property that affects
+    // timing requires rerunning the procedure to normalize specified timing.
+    effect.normalize_specified_timing();
+    effect.set_timing_function(animation_properties.timing_function);
+    effect.set_fill_mode(Animations::css_fill_mode_to_bindings_fill_mode(animation_properties.fill_mode));
+    effect.set_playback_direction(Animations::css_animation_direction_to_bindings_playback_direction(animation_properties.direction));
+    effect.set_composite(Animations::css_animation_composition_to_bindings_composite_operation(animation_properties.composition));
+
+    if (animation_properties.play_state != last_css_animation_play_state()) {
+        if (animation_properties.play_state == CSS::AnimationPlayState::Running && play_state() != Bindings::AnimationPlayState::Running) {
+            HTML::TemporaryExecutionContext context(realm());
+            play().release_value_but_fixme_should_propagate_errors();
+        } else if (animation_properties.play_state == CSS::AnimationPlayState::Paused && play_state() != Bindings::AnimationPlayState::Paused) {
+            HTML::TemporaryExecutionContext context(realm());
+            pause().release_value_but_fixme_should_propagate_errors();
+        }
+
+        set_last_css_animation_play_state(animation_properties.play_state);
+    }
+}
+
+void CSSAnimation::set_timeline_for_bindings(GC::Ptr<Animations::AnimationTimeline> timeline)
+{
+    // AD-HOC: When the timeline of a CSS animation is modified by the author from JS we should no longer apply changes
+    //         to the `animation-timeline` property. See https://github.com/w3c/csswg-drafts/issues/13472
+    m_ignored_css_properties.set(PropertyID::AnimationTimeline);
+    set_timeline(timeline);
 }
 
 CSSAnimation::CSSAnimation(JS::Realm& realm)

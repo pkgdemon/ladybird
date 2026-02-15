@@ -11,6 +11,8 @@
 #include <LibWeb/Bindings/SVGGraphicsElementPrototype.h>
 #include <LibWeb/CSS/Parser/Parser.h>
 #include <LibWeb/DOM/Document.h>
+#include <LibWeb/DOM/ShadowRoot.h>
+#include <LibWeb/Geometry/DOMRect.h>
 #include <LibWeb/Layout/Node.h>
 #include <LibWeb/Painting/PaintStyle.h>
 #include <LibWeb/Painting/PaintableBox.h>
@@ -47,7 +49,8 @@ void SVGGraphicsElement::attribute_changed(FlyString const& name, Optional<Strin
         auto transform_list = AttributeParser::parse_transform(value.value_or(String {}));
         if (transform_list.has_value())
             m_transform = transform_from_transform_list(*transform_list);
-        set_needs_layout_tree_update(true, DOM::SetNeedsLayoutTreeUpdateReason::SVGGraphicsElementTransformChange);
+        if (layout_node())
+            layout_node()->set_needs_layout_update(DOM::SetNeedsLayoutReason::SVGGraphicsElementTransformChange);
     }
 }
 
@@ -73,6 +76,27 @@ Optional<Painting::PaintStyle> SVGGraphicsElement::stroke_paint_style(SVGPaintCo
     if (!layout_node())
         return {};
     return svg_paint_computed_value_to_gfx_paint_style(paint_context, layout_node()->computed_values().stroke());
+}
+
+GC::Ptr<DOM::Element> SVGGraphicsElement::resolve_url_to_element(CSS::URL const& url) const
+{
+    // FIXME: Complete and use the entire URL, not just the fragment.
+    Optional<FlyString> fragment;
+    if (auto fragment_offset = url.url().find_byte_offset('#'); fragment_offset.has_value()) {
+        fragment = MUST(url.url().substring_from_byte_offset_with_shared_superstring(fragment_offset.value() + 1));
+    }
+    if (!fragment.has_value())
+        return {};
+    if (auto element = document().get_element_by_id(*fragment))
+        return element;
+
+    auto containing_shadow = containing_shadow_root();
+    if (containing_shadow) {
+        if (auto element = containing_shadow->get_element_by_id(*fragment))
+            return element;
+    }
+
+    return {};
 }
 
 GC::Ptr<SVG::SVGMaskElement const> SVGGraphicsElement::mask() const
@@ -122,15 +146,6 @@ Gfx::AffineTransform transform_from_transform_list(ReadonlySpan<Transform> trans
             });
     }
     return affine_transform;
-}
-
-Gfx::AffineTransform SVGGraphicsElement::get_transform() const
-{
-    Gfx::AffineTransform transform = m_transform;
-    for (auto* svg_ancestor = shadow_including_first_ancestor_of_type<SVGGraphicsElement>(); svg_ancestor; svg_ancestor = svg_ancestor->shadow_including_first_ancestor_of_type<SVGGraphicsElement>()) {
-        transform = Gfx::AffineTransform { svg_ancestor->element_transform() }.multiply(transform);
-    }
-    return transform;
 }
 
 static FillRule to_svg_fill_rule(CSS::FillRule fill_rule)
@@ -247,7 +262,7 @@ float SVGGraphicsElement::resolve_relative_to_viewport_size(CSS::LengthPercentag
     // FIXME: This isn't right, but it's something.
     CSSPixels viewport_width = 0;
     CSSPixels viewport_height = 0;
-    if (auto* svg_svg_element = shadow_including_first_ancestor_of_type<SVGSVGElement>()) {
+    if (auto* svg_svg_element = first_flat_tree_ancestor_of_type<SVGSVGElement>()) {
         if (auto svg_svg_layout_node = svg_svg_element->layout_node()) {
             viewport_width = svg_svg_layout_node->computed_values().width().to_px(*svg_svg_layout_node, 0);
             viewport_height = svg_svg_layout_node->computed_values().height().to_px(*svg_svg_layout_node, 0);
@@ -268,11 +283,8 @@ Vector<float> SVGGraphicsElement::stroke_dasharray() const
             [&](CSS::LengthPercentage const& length_percentage) {
                 dasharray.append(resolve_relative_to_viewport_size(length_percentage));
             },
-            [&](CSS::NumberOrCalculated const& number_or_calculated) {
-                CSS::CalculationResolutionContext calculation_context {
-                    .length_resolution_context = CSS::Length::ResolutionContext::for_layout_node(*layout_node()),
-                };
-                dasharray.append(number_or_calculated.resolved(calculation_context).value_or(0));
+            [&](float number) {
+                dasharray.append(number);
             });
     }
 

@@ -36,6 +36,7 @@ StringView export_format_name(ExportFormat format)
 }
 
 struct ImmutableBitmapImpl {
+    RefPtr<SkiaBackendContext> context;
     sk_sp<SkImage> sk_image;
     SkBitmap sk_bitmap;
     RefPtr<Gfx::Bitmap> bitmap;
@@ -200,6 +201,7 @@ ErrorOr<NonnullRefPtr<ImmutableBitmap>> ImmutableBitmap::create_from_yuv(Nonnull
 {
     // Hold onto the YUVData to lazily create the SkImage later.
     ImmutableBitmapImpl impl {
+        .context = nullptr,
         .sk_image = nullptr,
         .sk_bitmap = {},
         .bitmap = nullptr,
@@ -219,6 +221,7 @@ static sk_sp<SkColorSpace> color_space_from_cicp(Media::CodingIndependentCodePoi
             switch (cicp.color_primaries()) {
             case Media::ColorPrimaries::Reserved:
             case Media::ColorPrimaries::Unspecified:
+                return SkNamedPrimaries::kRec709;
             case Media::ColorPrimaries::XYZ:
                 VERIFY_NOT_REACHED();
             case Media::ColorPrimaries::BT709:
@@ -242,7 +245,7 @@ static sk_sp<SkColorSpace> color_space_from_cicp(Media::CodingIndependentCodePoi
             case Media::ColorPrimaries::EBU3213:
                 return SkNamedPrimaries::kITU_T_H273_Value22;
             }
-            VERIFY_NOT_REACHED();
+            return SkNamedPrimaries::kRec709;
         }();
         skcms_Matrix3x3 result;
         VERIFY(primaries.toXYZD50(&result));
@@ -253,7 +256,7 @@ static sk_sp<SkColorSpace> color_space_from_cicp(Media::CodingIndependentCodePoi
         switch (cicp.transfer_characteristics()) {
         case Media::TransferCharacteristics::Unspecified:
         case Media::TransferCharacteristics::Reserved:
-            VERIFY_NOT_REACHED();
+            return SkNamedTransferFn::kRec709;
         case Media::TransferCharacteristics::BT709:
             return SkNamedTransferFn::kRec709;
         case Media::TransferCharacteristics::BT470M:
@@ -288,7 +291,7 @@ static sk_sp<SkColorSpace> color_space_from_cicp(Media::CodingIndependentCodePoi
         case Media::TransferCharacteristics::HLG:
             return SkNamedTransferFn::kHLG;
         }
-        VERIFY_NOT_REACHED();
+        return SkNamedTransferFn::kRec709;
     }();
 
     return SkColorSpace::MakeRGB(transfer_function, gamut);
@@ -296,15 +299,35 @@ static sk_sp<SkColorSpace> color_space_from_cicp(Media::CodingIndependentCodePoi
 
 bool ImmutableBitmap::ensure_sk_image(SkiaBackendContext& context) const
 {
-    if (m_impl->sk_image)
+    if (m_impl->context) {
+        VERIFY(m_impl->context.ptr() == &context);
         return true;
+    }
 
-    // Bitmap-backed ImmutableBitmaps must have an sk_image already.
-    VERIFY(m_impl->yuv_data != nullptr);
+    context.lock();
+    ScopeGuard unlock_guard = [&context] {
+        context.unlock();
+    };
 
     auto* gr_context = context.sk_context();
+
+    // Bitmap-backed: try to upload raster image to GPU texture
+    if (m_impl->sk_image) {
+        if (!gr_context)
+            return true; // No GPU, but raster image is still usable
+        auto gpu_image = SkImages::TextureFromImage(gr_context, m_impl->sk_image.get(), skgpu::Mipmapped::kNo, skgpu::Budgeted::kYes);
+        if (gpu_image) {
+            m_impl->context = context;
+            m_impl->sk_image = move(gpu_image);
+        }
+        return true;
+    }
+
+    // YUV-backed: GPU is required to decode YUV to RGB
+    VERIFY(m_impl->yuv_data);
+
     if (!gr_context)
-        return false;
+        return false; // No GPU, cannot create image from YUV data
 
     auto const& pixmaps = m_impl->yuv_data->skia_yuva_pixmaps();
     auto color_space = color_space_from_cicp(m_impl->yuv_data->cicp());
@@ -319,6 +342,7 @@ bool ImmutableBitmap::ensure_sk_image(SkiaBackendContext& context) const
     if (!sk_image)
         return false;
 
+    m_impl->context = context;
     m_impl->sk_image = move(sk_image);
     return true;
 }
@@ -349,6 +373,7 @@ NonnullRefPtr<ImmutableBitmap> ImmutableBitmap::create(NonnullRefPtr<Bitmap> bit
     auto sk_image = sk_bitmap.asImage();
 
     ImmutableBitmapImpl impl {
+        .context = nullptr,
         .sk_image = move(sk_image),
         .sk_bitmap = move(sk_bitmap),
         .bitmap = move(bitmap),
@@ -383,6 +408,7 @@ NonnullRefPtr<ImmutableBitmap> ImmutableBitmap::create_snapshot_from_painting_su
     auto sk_image = sk_bitmap.asImage();
 
     ImmutableBitmapImpl impl {
+        .context = nullptr,
         .sk_image = move(sk_image),
         .sk_bitmap = move(sk_bitmap),
         .bitmap = move(bitmap),
@@ -397,6 +423,25 @@ ImmutableBitmap::ImmutableBitmap(NonnullOwnPtr<ImmutableBitmapImpl> impl)
 {
 }
 
-ImmutableBitmap::~ImmutableBitmap() = default;
+ImmutableBitmap::~ImmutableBitmap()
+{
+    lock_context();
+    m_impl->sk_image = nullptr;
+    unlock_context();
+}
+
+void ImmutableBitmap::lock_context()
+{
+    auto& context = m_impl->context;
+    if (context)
+        context->lock();
+}
+
+void ImmutableBitmap::unlock_context()
+{
+    auto& context = m_impl->context;
+    if (context)
+        context->unlock();
+}
 
 }

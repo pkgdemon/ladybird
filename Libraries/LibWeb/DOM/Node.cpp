@@ -9,6 +9,7 @@
  */
 
 #include <AK/HashTable.h>
+#include <AK/JsonObjectSerializer.h>
 #include <AK/StringBuilder.h>
 #include <LibGC/DeferGC.h>
 #include <LibIPC/Decoder.h>
@@ -20,6 +21,7 @@
 #include <LibWeb/Bindings/NodePrototype.h>
 #include <LibWeb/CSS/ComputedProperties.h>
 #include <LibWeb/CSS/StyleComputer.h>
+#include <LibWeb/DOM/AccessibilityTreeNode.h>
 #include <LibWeb/DOM/Attr.h>
 #include <LibWeb/DOM/CDATASection.h>
 #include <LibWeb/DOM/Comment.h>
@@ -47,6 +49,7 @@
 #include <LibWeb/HTML/HTMLImageElement.h>
 #include <LibWeb/HTML/HTMLInputElement.h>
 #include <LibWeb/HTML/HTMLLegendElement.h>
+#include <LibWeb/HTML/HTMLScriptElement.h>
 #include <LibWeb/HTML/HTMLSelectElement.h>
 #include <LibWeb/HTML/HTMLSlotElement.h>
 #include <LibWeb/HTML/HTMLStyleElement.h>
@@ -57,6 +60,7 @@
 #include <LibWeb/HTML/Parser/HTMLParser.h>
 #include <LibWeb/HTML/Scripting/SimilarOriginWindowAgent.h>
 #include <LibWeb/HTML/Scripting/TemporaryExecutionContext.h>
+#include <LibWeb/HTML/XMLSerializer.h>
 #include <LibWeb/Infra/CharacterTypes.h>
 #include <LibWeb/Layout/Node.h>
 #include <LibWeb/Layout/TextNode.h>
@@ -747,6 +751,15 @@ void Node::insert_before(GC::Ref<Node> node, GC::Ptr<Node> child, bool suppress_
                 signal_a_slot_change(*this_slot_element);
         }
 
+        // AD-HOC: Register any slot elements in the inserted subtree with the shadow root’s slot registry
+        //         before running assign_slottables_for_a_tree, so the registry is up-to-date.
+        if (auto* shadow_root = as_if<ShadowRoot>(node_to_insert->root())) {
+            node_to_insert->for_each_in_inclusive_subtree_of_type<HTML::HTMLSlotElement>([&](auto& slot) {
+                shadow_root->register_slot(slot);
+                return TraversalDecision::Continue;
+            });
+        }
+
         // 6. Run assign slottables for a tree with node’s root.
         assign_slottables_for_a_tree(node_to_insert->root());
 
@@ -977,10 +990,15 @@ void Node::remove(bool suppress_observers)
 
     // 10. If node has an inclusive descendant that is a slot, then:
     auto has_descendent_slot = false;
+    auto* shadow_root = as_if<ShadowRoot>(parent_root);
 
-    for_each_in_inclusive_subtree_of_type<HTML::HTMLSlotElement>([&](auto const&) {
+    for_each_in_inclusive_subtree_of_type<HTML::HTMLSlotElement>([&](auto& slot) {
         has_descendent_slot = true;
-        return TraversalDecision::Break;
+        if (!shadow_root)
+            return TraversalDecision::Break;
+        // AD-HOC: Unregister slot from the shadow root's registry before assign_slottables_for_a_tree.
+        shadow_root->unregister_slot(slot);
+        return TraversalDecision::Continue;
     });
 
     if (has_descendent_slot) {
@@ -1284,10 +1302,15 @@ WebIDL::ExceptionOr<void> Node::move_node(Node& new_parent, Node* child)
 
     // 16. If node has an inclusive descendant that is a slot:
     auto has_descendent_slot = false;
+    auto* shadow_root = as_if<ShadowRoot>(old_parent_root);
 
-    for_each_in_inclusive_subtree_of_type<HTML::HTMLSlotElement>([&](auto const&) {
+    for_each_in_inclusive_subtree_of_type<HTML::HTMLSlotElement>([&](auto& slot) {
         has_descendent_slot = true;
-        return TraversalDecision::Break;
+        if (!shadow_root)
+            return TraversalDecision::Break;
+        // AD-HOC: Unregister slot from the shadow root's registry before assign_slottables_for_a_tree.
+        shadow_root->unregister_slot(slot);
+        return TraversalDecision::Continue;
     });
 
     if (has_descendent_slot) {
@@ -1342,6 +1365,15 @@ WebIDL::ExceptionOr<void> Node::move_node(Node& new_parent, Node* child)
 
         if (is_named_shadow_host && this_element.is_slottable())
             assign_a_slot(this_element.as_slottable());
+    }
+
+    // AD-HOC: Register any slot elements in the moved subtree with the shadow root's slot registry so the registry is
+    //         up-to-date.
+    if (auto* new_shadow_root = as_if<ShadowRoot>(root())) {
+        for_each_in_inclusive_subtree_of_type<HTML::HTMLSlotElement>([&](auto& slot) {
+            new_shadow_root->register_slot(slot);
+            return TraversalDecision::Continue;
+        });
     }
 
     // 22. If newParent’s root is a shadow root, and newParent is a slot whose assigned nodes is empty, then run signal a slot change for newParent.
@@ -1669,7 +1701,7 @@ void Node::set_needs_layout_tree_update(bool value, SetNeedsLayoutTreeUpdateReas
             // NOTE: We check some conditions here to avoid debug spam in documents that don't do layout.
             auto navigable = this->navigable();
             bool any_ancestor_needs_layout_tree_update = false;
-            for (auto* ancestor = parent_or_shadow_host(); ancestor; ancestor = ancestor->parent_or_shadow_host()) {
+            for (auto* ancestor = flat_tree_parent(); ancestor; ancestor = ancestor->flat_tree_parent()) {
                 if (ancestor->needs_layout_tree_update()) {
                     any_ancestor_needs_layout_tree_update = true;
                     break;
@@ -1689,7 +1721,7 @@ void Node::set_needs_layout_tree_update(bool value, SetNeedsLayoutTreeUpdateReas
     }
 
     if (m_needs_layout_tree_update) {
-        for (auto* ancestor = parent_or_shadow_host(); ancestor; ancestor = ancestor->parent_or_shadow_host()) {
+        for (auto* ancestor = flat_tree_parent(); ancestor; ancestor = ancestor->flat_tree_parent()) {
             if (ancestor->m_child_needs_layout_tree_update)
                 break;
             ancestor->m_child_needs_layout_tree_update = true;
@@ -1772,6 +1804,28 @@ Element* Node::parent_or_shadow_host_element()
         return static_cast<Element*>(parent());
     if (is<ShadowRoot>(*parent()))
         return static_cast<ShadowRoot&>(*parent()).host();
+    return nullptr;
+}
+
+ParentNode* Node::flat_tree_parent()
+{
+    // If we're assigned to a slot, that slot is our flat tree parent.
+    if (is_slottable()) {
+        auto& slottable = as_slottable().visit([](auto& node) -> SlottableMixin& { return *node; });
+        if (auto slot = slottable.assigned_slot())
+            return slot;
+    }
+
+    // Otherwise, this is the parent or shadow host.
+    return parent_or_shadow_host();
+}
+
+Element* Node::flat_tree_parent_element()
+{
+    for (auto* parent = flat_tree_parent(); parent; parent = parent->flat_tree_parent()) {
+        if (auto* element = as_if<Element>(parent))
+            return element;
+    }
     return nullptr;
 }
 

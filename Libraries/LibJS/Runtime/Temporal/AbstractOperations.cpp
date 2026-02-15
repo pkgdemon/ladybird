@@ -2,7 +2,7 @@
  * Copyright (c) 2021-2022, Idan Horowitz <idan.horowitz@serenityos.org>
  * Copyright (c) 2021-2023, Linus Groh <linusg@serenityos.org>
  * Copyright (c) 2021, Luke Wilde <lukew@serenityos.org>
- * Copyright (c) 2024-2025, Tim Flynn <trflynn89@ladybird.org>
+ * Copyright (c) 2024-2026, Tim Flynn <trflynn89@ladybird.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -58,11 +58,7 @@ double iso_date_to_epoch_days(double year, double month, double date)
     // 3. Find a time t such that EpochTimeToEpochYear(t) = resolvedYear, EpochTimeToMonthInYear(t) = resolvedMonth, and EpochTimeToDate(t) = 1.
     // 4. Return EpochTimeToDayNumber(t) + date - 1.
 
-    // EDITOR'S NOTE: This operation corresponds to ECMA-262 operation MakeDay(year, month, date). It calculates the
-    //                result in mathematical values instead of Number values. These two operations would be unified when
-    //                https://github.com/tc39/ecma262/issues/1087 is fixed.
-
-    // Since we don't have a real MV type to work with, let's defer to MakeDay.
+    // NB: Since we don't have a real MV type to work with, let's defer to MakeDay.
     return JS::make_day(year, month, date);
 }
 
@@ -76,11 +72,9 @@ double epoch_days_to_epoch_ms(double day, double time)
 // 13.4 CheckISODaysRange ( isoDate ), https://tc39.es/proposal-temporal/#sec-checkisodaysrange
 ThrowCompletionOr<void> check_iso_days_range(VM& vm, ISODate iso_date)
 {
-    // 1. If abs(ISODateToEpochDays(isoDate.[[Year]], isoDate.[[Month]] - 1, isoDate.[[Day]])) > 10**8, then
-    if (fabs(iso_date_to_epoch_days(iso_date.year, iso_date.month - 1, iso_date.day)) > 100'000'000) {
-        // a. Throw a RangeError exception.
+    // 1. If abs(ISODateToEpochDays(isoDate.[[Year]], isoDate.[[Month]] - 1, isoDate.[[Day]])) > 10**8, throw a RangeError exception.
+    if (fabs(iso_date_to_epoch_days(iso_date.year, iso_date.month - 1, iso_date.day)) > 100'000'000)
         return vm.throw_completion<RangeError>(ErrorType::TemporalInvalidISODate);
-    }
 
     // 2. Return unused.
     return {};
@@ -282,11 +276,9 @@ ThrowCompletionOr<void> validate_temporal_rounding_increment(VM& vm, u64 increme
     if (increment > maximum)
         return vm.throw_completion<RangeError>(ErrorType::OptionIsNotValidValue, increment, "roundingIncrement");
 
-    // 5. If dividend modulo increment ≠ 0, then
-    if (modulo(dividend, increment) != 0) {
-        // a. Throw a RangeError exception.
+    // 5. If dividend modulo increment ≠ 0, throw a RangeError exception.
+    if (modulo(dividend, increment) != 0)
         return vm.throw_completion<RangeError>(ErrorType::OptionIsNotValidValue, increment, "roundingIncrement");
-    }
 
     // 6. Return UNUSED.
     return {};
@@ -314,7 +306,7 @@ ThrowCompletionOr<Precision> get_temporal_fractional_second_digits_option(VM& vm
         return Precision { Auto {} };
     }
 
-    // 4. If digitsValue is NaN, +∞𝔽, or -∞𝔽, throw a RangeError exception.
+    // 4. If digitsValue is one of NaN, +∞𝔽, or -∞𝔽, throw a RangeError exception.
     if (digits_value.is_nan() || digits_value.is_infinity())
         return vm.throw_completion<RangeError>(ErrorType::OptionIsNotValidValue, digits_value, vm.names.fractionalSecondDigits);
 
@@ -333,65 +325,47 @@ ThrowCompletionOr<Precision> get_temporal_fractional_second_digits_option(VM& vm
 SecondsStringPrecision to_seconds_string_precision_record(UnitValue smallest_unit, Precision fractional_digit_count)
 {
     if (auto const* unit = smallest_unit.get_pointer<Unit>()) {
-        // 1. If smallestUnit is MINUTE, then
-        if (*unit == Unit::Minute) {
-            // a. Return the Record { [[Precision]]: MINUTE, [[Unit]]: MINUTE, [[Increment]]: 1  }.
+        // 1. If smallestUnit is MINUTE, return the Record { [[Precision]]: MINUTE, [[Unit]]: MINUTE, [[Increment]]: 1  }.
+        if (*unit == Unit::Minute)
             return { .precision = SecondsStringPrecision::Minute {}, .unit = Unit::Minute, .increment = 1 };
-        }
 
-        // 2. If smallestUnit is SECOND, then
-        if (*unit == Unit::Second) {
-            // a. Return the Record { [[Precision]]: 0, [[Unit]]: SECOND, [[Increment]]: 1  }.
+        // 2. If smallestUnit is SECOND, return the Record { [[Precision]]: 0, [[Unit]]: SECOND, [[Increment]]: 1  }.
+        if (*unit == Unit::Second)
             return { .precision = 0, .unit = Unit::Second, .increment = 1 };
-        }
 
-        // 3. If smallestUnit is MILLISECOND, then
-        if (*unit == Unit::Millisecond) {
-            // a. Return the Record { [[Precision]]: 3, [[Unit]]: MILLISECOND, [[Increment]]: 1  }.
+        // 3. If smallestUnit is MILLISECOND, return the Record { [[Precision]]: 3, [[Unit]]: MILLISECOND, [[Increment]]: 1  }.
+        if (*unit == Unit::Millisecond)
             return { .precision = 3, .unit = Unit::Millisecond, .increment = 1 };
-        }
 
-        // 4. If smallestUnit is MICROSECOND, then
-        if (*unit == Unit::Microsecond) {
-            // a. Return the Record { [[Precision]]: 6, [[Unit]]: MICROSECOND, [[Increment]]: 1  }.
+        // 4. If smallestUnit is MICROSECOND, return the Record { [[Precision]]: 6, [[Unit]]: MICROSECOND, [[Increment]]: 1  }.
+        if (*unit == Unit::Microsecond)
             return { .precision = 6, .unit = Unit::Microsecond, .increment = 1 };
-        }
 
-        // 5. If smallestUnit is NANOSECOND, then
-        if (*unit == Unit::Nanosecond) {
-            // a. Return the Record { [[Precision]]: 9, [[Unit]]: NANOSECOND, [[Increment]]: 1  }.
+        // 5. If smallestUnit is NANOSECOND, return the Record { [[Precision]]: 9, [[Unit]]: NANOSECOND, [[Increment]]: 1  }.
+        if (*unit == Unit::Nanosecond)
             return { .precision = 9, .unit = Unit::Nanosecond, .increment = 1 };
-        }
     }
 
     // 6. Assert: smallestUnit is UNSET.
     VERIFY(smallest_unit.has<Unset>());
 
-    // 7. If fractionalDigitCount is auto, then
-    if (fractional_digit_count.has<Auto>()) {
-        // a. Return the Record { [[Precision]]: AUTO, [[Unit]]: NANOSECOND, [[Increment]]: 1  }.
+    // 7. If fractionalDigitCount is auto, return the Record { [[Precision]]: AUTO, [[Unit]]: NANOSECOND, [[Increment]]: 1  }.
+    if (fractional_digit_count.has<Auto>())
         return { .precision = Auto {}, .unit = Unit::Nanosecond, .increment = 1 };
-    }
 
     auto fractional_digits = fractional_digit_count.get<u8>();
 
-    // 8. If fractionalDigitCount = 0, then
-    if (fractional_digits == 0) {
-        // a. Return the Record { [[Precision]]: 0, [[Unit]]: SECOND, [[Increment]]: 1  }.
+    // 8. If fractionalDigitCount = 0, return the Record { [[Precision]]: 0, [[Unit]]: SECOND, [[Increment]]: 1  }.
+    if (fractional_digits == 0)
         return { .precision = 0, .unit = Unit::Second, .increment = 1 };
-    }
 
-    // 9. If fractionalDigitCount is in the inclusive interval from 1 to 3, then
-    if (fractional_digits >= 1 && fractional_digits <= 3) {
-        // a. Return the Record { [[Precision]]: fractionalDigitCount, [[Unit]]: MILLISECOND, [[Increment]]: 10**(3 - fractionalDigitCount)  }.
+    // 9. If fractionalDigitCount is in the inclusive interval from 1 to 3, return the Record { [[Precision]]: fractionalDigitCount, [[Unit]]: MILLISECOND, [[Increment]]: 10**(3 - fractionalDigitCount)  }.
+    if (fractional_digits >= 1 && fractional_digits <= 3)
         return { .precision = fractional_digits, .unit = Unit::Millisecond, .increment = static_cast<u8>(pow(10, 3 - fractional_digits)) };
-    }
 
-    // 10. If fractionalDigitCount is in the inclusive interval from 4 to 6, then
-    if (fractional_digits >= 4 && fractional_digits <= 6) {
-        // a. Return the Record { [[Precision]]: fractionalDigitCount, [[Unit]]: MICROSECOND, [[Increment]]: 10**(6 - fractionalDigitCount)  }.
+    // 10. If fractionalDigitCount is in the inclusive interval from 4 to 6, return the Record { [[Precision]]: fractionalDigitCount, [[Unit]]: MICROSECOND, [[Increment]]: 10**(6 - fractionalDigitCount)  }.
+    if (fractional_digits >= 4 && fractional_digits <= 6)
         return { .precision = fractional_digits, .unit = Unit::Microsecond, .increment = static_cast<u8>(pow(10, 6 - fractional_digits)) };
-    }
 
     // 11. Assert: fractionalDigitCount is in the inclusive interval from 7 to 9.
     VERIFY(fractional_digits >= 7 && fractional_digits <= 9);
@@ -473,11 +447,11 @@ ThrowCompletionOr<void> validate_temporal_unit_value(VM& vm, PropertyKey const& 
     auto unit_value = value.get<Unit>();
     auto category = temporal_unit_category(unit_value);
 
-    // 4. If category is DATE and unitGroup is DATE or DATETIME, return unused.
+    // 4. If category is DATE and unitGroup is either DATE or DATETIME, return unused.
     if (category == UnitCategory::Date && (unit_group == UnitGroup::Date || unit_group == UnitGroup::DateTime))
         return {};
 
-    // 5. If category is TIME and unitGroup is TIME or DATETIME, return unused.
+    // 5. If category is TIME and unitGroup is either TIME or DATETIME, return unused.
     if (category == UnitCategory::Time && (unit_group == UnitGroup::Time || unit_group == UnitGroup::DateTime))
         return {};
 
@@ -513,23 +487,21 @@ ThrowCompletionOr<RelativeTo> get_temporal_relative_to_option(VM& vm, Object con
         auto& object = value.as_object();
 
         // a. If value has an [[InitializedTemporalZonedDateTime]] internal slot, then
-        if (is<ZonedDateTime>(object)) {
+        if (auto* zoned_date_time = as_if<ZonedDateTime>(object)) {
             // i. Return the Record { [[PlainRelativeTo]]: undefined, [[ZonedRelativeTo]]: value }.
-            return RelativeTo { .plain_relative_to = {}, .zoned_relative_to = static_cast<ZonedDateTime&>(object) };
+            return RelativeTo { .plain_relative_to = {}, .zoned_relative_to = zoned_date_time };
         }
 
         // b. If value has an [[InitializedTemporalDate]] internal slot, then
-        if (is<PlainDate>(object)) {
+        if (auto* plain_date = as_if<PlainDate>(object)) {
             // i. Return the Record { [[PlainRelativeTo]]: value, [[ZonedRelativeTo]]: undefined }.
-            return RelativeTo { .plain_relative_to = static_cast<PlainDate&>(object), .zoned_relative_to = {} };
+            return RelativeTo { .plain_relative_to = plain_date, .zoned_relative_to = {} };
         }
 
         // c. If value has an [[InitializedTemporalDateTime]] internal slot, then
-        if (is<PlainDateTime>(object)) {
-            auto const& plain_date_time = static_cast<PlainDateTime const&>(object);
-
+        if (auto const* plain_date_time = as_if<PlainDateTime>(object)) {
             // i. Let plainDate be ! CreateTemporalDate(value.[[ISODateTime]].[[ISODate]], value.[[Calendar]]).
-            auto plain_date = MUST(create_temporal_date(vm, plain_date_time.iso_date_time().iso_date, plain_date_time.calendar()));
+            auto plain_date = MUST(create_temporal_date(vm, plain_date_time->iso_date_time().iso_date, plain_date_time->calendar()));
 
             // ii. Return the Record { [[PlainRelativeTo]]: plainDate, [[ZonedRelativeTo]]: undefined }.
             return RelativeTo { .plain_relative_to = plain_date, .zoned_relative_to = {} };
@@ -820,7 +792,7 @@ String format_fractional_seconds(u64 sub_second_nanoseconds, Precision precision
 // 13.26 FormatTimeString ( hour, minute, second, subSecondNanoseconds, precision [ , style ] ), https://tc39.es/proposal-temporal/#sec-temporal-formattimestring
 String format_time_string(u8 hour, u8 minute, u8 second, u64 sub_second_nanoseconds, SecondsStringPrecision::Precision precision, Optional<TimeStyle> style)
 {
-    // 1. If style is present and style is UNSEPARATED, let separator be the empty String; otherwise, let separator be ":".
+    // 1. If style is present and style is UNSEPARATED, let separator be the empty String; else, let separator be ":".
     auto separator = style == TimeStyle::Unseparated ? ""sv : ":"sv;
 
     // 2. Let hh be ToZeroPaddedDecimalString(hour, 2).
@@ -1181,14 +1153,14 @@ ThrowCompletionOr<ParsedISODateTime> parse_iso_date_time(VM& vm, StringView iso_
 
             // 3. If goal is TemporalYearMonthString and parseResult does not contain a DateDay Parse Node, then
             if (goal == Production::TemporalYearMonthString && !parse_result->date_day.has_value()) {
-                // a. If calendar is not empty and the ASCII-lowercase of calendar is not "iso8601", throw a RangeError exception.
+                // a. If calendar is not EMPTY and the ASCII-lowercase of calendar is not "iso8601", throw a RangeError exception.
                 if (calendar.has_value() && !calendar->equals_ignoring_ascii_case("iso8601"sv))
                     return vm.throw_completion<RangeError>(ErrorType::TemporalInvalidCalendarIdentifier, *calendar);
             }
 
             // 4. If goal is TemporalMonthDayString and parseResult does not contain a DateYear Parse Node, then
             if (goal == Production::TemporalMonthDayString && !parse_result->date_year.has_value()) {
-                // a. If calendar is not empty and the ASCII-lowercase of calendar is not "iso8601", throw a RangeError exception.
+                // a. If calendar is not EMPTY and the ASCII-lowercase of calendar is not "iso8601", throw a RangeError exception.
                 if (calendar.has_value() && !calendar->equals_ignoring_ascii_case("iso8601"sv))
                     return vm.throw_completion<RangeError>(ErrorType::TemporalInvalidCalendarIdentifier, *calendar);
 
@@ -1355,7 +1327,7 @@ ThrowCompletionOr<String> parse_temporal_calendar_string(VM& vm, String const& s
         // a. Let calendar be parseResult.[[Value]].[[Calendar]].
         auto calendar = parse_result.value().calendar;
 
-        // b. If calendar is empty, return "iso8601".
+        // b. If calendar is EMPTY, return "iso8601".
         // c. Else, return calendar.
         return calendar.value_or("iso8601"_string);
     }
@@ -1597,11 +1569,9 @@ ThrowCompletionOr<ParsedTimeZoneIdentifier> parse_temporal_time_zone_string(VM& 
     // 1. Let parseResult be ParseText(StringToCodePoints(timeZoneString), TimeZoneIdentifier).
     auto parse_result = parse_iso8601(Production::TimeZoneIdentifier, time_zone_string);
 
-    // 2. If parseResult is a Parse Node, then
-    if (parse_result.has_value()) {
-        // a. Return ! ParseTimeZoneIdentifier(timeZoneString).
+    // 2. If parseResult is a Parse Node, return ! ParseTimeZoneIdentifier(timeZoneString).
+    if (parse_result.has_value())
         return parse_time_zone_identifier(parse_result.release_value());
-    }
 
     // 3. Let result be ? ParseISODateTime(timeZoneString, « TemporalDateTimeString[+Zoned], TemporalDateTimeString[~Zoned],
     //    TemporalInstantString, TemporalTimeString, TemporalMonthDayString, TemporalYearMonthString »).
@@ -1619,23 +1589,17 @@ ThrowCompletionOr<ParsedTimeZoneIdentifier> parse_temporal_time_zone_string(VM& 
     // 4. Let timeZoneResult be result.[[TimeZone]].
     auto time_zone_result = move(result.time_zone);
 
-    // 5. If timeZoneResult.[[TimeZoneAnnotation]] is not empty, then
-    if (time_zone_result.time_zone_annotation.has_value()) {
-        // a. Return ! ParseTimeZoneIdentifier(timeZoneResult.[[TimeZoneAnnotation]]).
+    // 5. If timeZoneResult.[[TimeZoneAnnotation]] is not EMPTY, return ! ParseTimeZoneIdentifier(timeZoneResult.[[TimeZoneAnnotation]]).
+    if (time_zone_result.time_zone_annotation.has_value())
         return MUST(parse_time_zone_identifier(vm, *time_zone_result.time_zone_annotation));
-    }
 
-    // 6. If timeZoneResult.[[Z]] is true, then
-    if (time_zone_result.z_designator) {
-        // a. Return ! ParseTimeZoneIdentifier("UTC").
+    // 6. If timeZoneResult.[[Z]] is true, return ! ParseTimeZoneIdentifier("UTC").
+    if (time_zone_result.z_designator)
         return MUST(parse_time_zone_identifier(vm, "UTC"sv));
-    }
 
-    // 7. If timeZoneResult.[[OffsetString]] is not empty, then
-    if (time_zone_result.offset_string.has_value()) {
-        // a. Return ? ParseTimeZoneIdentifier(timeZoneResult.[[OffsetString]]).
+    // 7. If timeZoneResult.[[OffsetString]] is not EMPTY, return ? ParseTimeZoneIdentifier(timeZoneResult.[[OffsetString]]).
+    if (time_zone_result.offset_string.has_value())
         return TRY(parse_time_zone_identifier(vm, *time_zone_result.offset_string));
-    }
 
     // 8. Throw a RangeError exception.
     return vm.throw_completion<RangeError>(ErrorType::TemporalInvalidTimeZoneString, time_zone_string);
@@ -1670,13 +1634,13 @@ CalendarFields iso_date_to_fields(StringView calendar, ISODate iso_date, DateTyp
     // 3. Set fields.[[MonthCode]] to calendarDate.[[MonthCode]].
     fields.month_code = calendar_date.month_code;
 
-    // 4. If type is MONTH-DAY or DATE, then
+    // 4. If type is either MONTH-DAY or DATE, then
     if (type == DateType::MonthDay || type == DateType::Date) {
         // a. Set fields.[[Day]] to calendarDate.[[Day]].
         fields.day = calendar_date.day;
     }
 
-    // 5. If type is YEAR-MONTH or DATE, then
+    // 5. If type is either YEAR-MONTH or DATE, then
     if (type == DateType::YearMonth || type == DateType::Date) {
         // a. Set fields.[[Year]] to calendarDate.[[Year]].
         fields.year = calendar_date.year;

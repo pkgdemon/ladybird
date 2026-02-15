@@ -21,6 +21,11 @@ constexpr inline auto TEST_CACHE_STATUS_HEADER = "X-Ladybird-Disk-Cache-Status"s
 constexpr inline auto TEST_CACHE_REVALIDATION_STATUS_HEADER = "X-Ladybird-Revalidation-Status"sv;
 constexpr inline auto TEST_CACHE_REQUEST_TIME_OFFSET = "X-Ladybird-Request-Time-Offset"sv;
 
+constexpr inline u64 DEFAULT_MAXIMUM_DISK_CACHE_SIZE = 5 * GiB;
+
+u64 compute_maximum_disk_cache_size(u64 free_bytes, u64 limit_maximum_disk_cache_size = DEFAULT_MAXIMUM_DISK_CACHE_SIZE);
+u64 compute_maximum_disk_cache_entry_size(u64 maximum_disk_cache_size);
+
 String serialize_url_for_cache_storage(URL::URL const&);
 u64 create_cache_key(StringView url, StringView method);
 u64 create_vary_key(HeaderList const& request_headers, HeaderList const& response_headers);
@@ -40,17 +45,21 @@ enum class CacheLifetimeStatus {
     MustRevalidate,
     StaleWhileRevalidate,
 };
-CacheLifetimeStatus cache_lifetime_status(HeaderList const&, AK::Duration freshness_lifetime, AK::Duration current_age);
+CacheLifetimeStatus cache_lifetime_status(HeaderList const& request_headers, HeaderList const& response_headers, AK::Duration freshness_lifetime, AK::Duration current_age);
 
 struct RevalidationAttributes {
     static RevalidationAttributes create(HeaderList const&);
 
     Optional<ByteString> etag;
-    Optional<UnixDateTime> last_modified;
+    Optional<ByteString> last_modified;
 };
 
 void store_header_and_trailer_fields(HeaderList&, HeaderList const&);
 void update_header_fields(HeaderList&, HeaderList const&);
+
+bool contains_cache_control_directive(StringView cache_control, StringView directive);
+Optional<StringView> extract_cache_control_directive(StringView cache_control, StringView directive);
+Optional<AK::Duration> extract_cache_control_duration_directive(StringView cache_control, StringView directive, Optional<AK::Duration> valueless_fallback = {});
 
 ByteString normalize_request_vary_header_values(StringView header, HeaderList const& request_headers);
 

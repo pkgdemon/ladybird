@@ -17,6 +17,7 @@
 
 namespace Web {
 
+class AutoScrollHandler;
 class CSSPixels;
 class DisplayListRecordingContext;
 class DragAndDropEventHandler;
@@ -61,6 +62,7 @@ class AnimationPlaybackEvent;
 class AnimationTimeline;
 class DocumentTimeline;
 class KeyframeEffect;
+class ScrollTimeline;
 
 }
 
@@ -167,15 +169,6 @@ struct SerializedDirective;
 
 }
 
-namespace Web::Cookie {
-
-struct Cookie;
-struct ParsedCookie;
-
-enum class Source;
-
-}
-
 namespace Web::CookieStore {
 
 class CookieChangeEvent;
@@ -224,6 +217,7 @@ class BorderRadiusStyleValue;
 class CalculatedStyleValue;
 class CalculationNode;
 class CascadedProperties;
+class CustomPropertyData;
 class Clip;
 class ColorMixStyleValue;
 class ColorSchemeStyleValue;
@@ -233,10 +227,13 @@ class ComputedProperties;
 class ConicGradientStyleValue;
 class ContentStyleValue;
 class CounterDefinitionsStyleValue;
+class CounterStyleStyleValue;
+class CounterStyleSystemStyleValue;
 class CounterStyleValue;
 class CountersSet;
 class CSSAnimation;
 class CSSConditionRule;
+class CSSCounterStyleRule;
 class CSSDescriptors;
 class CSSFontFaceDescriptors;
 class CSSFontFaceRule;
@@ -416,6 +413,7 @@ struct CSSStyleSheetInit;
 struct GridRepeatParams;
 struct LogicalAliasMappingContext;
 struct RandomCachingKey;
+struct RequiredInvalidationAfterStyleChange;
 struct StyleSheetIdentifier;
 struct TransitionProperties;
 template<typename T>
@@ -490,6 +488,7 @@ class PseudoElement;
 class Range;
 class RegisteredObserver;
 class ShadowRoot;
+class SlotRegistry;
 class StaticNodeList;
 class StaticRange;
 class StyleInvalidator;
@@ -498,6 +497,7 @@ class TreeWalker;
 class XMLDocument;
 
 enum class QuirksMode;
+enum class SetNeedsLayoutReason;
 
 struct AddEventListenerOptions;
 struct EventListenerOptions;
@@ -796,6 +796,7 @@ class XMLSerializer;
 
 enum class AllowMultipleFiles;
 enum class MediaSeekMode;
+enum class RequireWellFormed;
 enum class SandboxingFlagSet;
 
 struct Agent;
@@ -894,6 +895,7 @@ class NodeWithStyle;
 class NodeWithStyleAndBoxModelMetrics;
 class RadioButton;
 class ReplacedBox;
+class SVGSVGBox;
 class TableWrapper;
 class TextNode;
 class TreeBuilder;
@@ -1127,6 +1129,7 @@ namespace Web::SVG {
 
 class Path;
 class SVGAnimatedEnumeration;
+class SVGAnimatedInteger;
 class SVGAnimatedLength;
 class SVGAnimatedLengthList;
 class SVGAnimatedNumber;
@@ -1153,6 +1156,7 @@ class SVGFEFuncRElement;
 class SVGFEGaussianBlurElement;
 class SVGFEImageElement;
 class SVGFEMorphologyElement;
+class SVGFETurbulenceElement;
 class SVGFilterElement;
 class SVGFitToViewBox;
 class SVGForeignObjectElement;
@@ -1288,6 +1292,7 @@ class EXTColorBufferFloat;
 class EXTRenderSnorm;
 class EXTTextureFilterAnisotropic;
 class EXTTextureNorm16;
+class OESElementIndexUint;
 class OESStandardDerivatives;
 class OESVertexArrayObject;
 class WebGLCompressedTextureS3tc;
@@ -1303,6 +1308,7 @@ class ArrayBufferView;
 class BufferSource;
 class CallbackType;
 class DOMException;
+class ObservableArray;
 
 template<typename ValueType>
 class ExceptionOr;
@@ -1335,6 +1341,8 @@ class VTTRegion;
 
 namespace Web::WebXR {
 
+class XRSession;
+class XRSessionEvent;
 class XRSystem;
 
 }

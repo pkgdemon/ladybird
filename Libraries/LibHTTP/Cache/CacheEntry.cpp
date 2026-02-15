@@ -141,7 +141,7 @@ ErrorOr<void> CacheEntryWriter::write_status_and_reason(u32 status_code, Optiona
 
         // We can cache already-expired responses if there are other cache directives that allow us to revalidate the
         // response on subsequent requests. For example, `Cache-Control: max-age=0, must-revalidate`.
-        if (cache_lifetime_status(response_headers, freshness_lifetime, current_age) == CacheLifetimeStatus::Expired)
+        if (cache_lifetime_status(request_headers, response_headers, freshness_lifetime, current_age) == CacheLifetimeStatus::Expired)
             return Error::from_string_literal("Response has already expired");
 
         auto unbuffered_file = TRY(Core::File::open(m_path->string(), Core::File::OpenMode::Write));
@@ -203,13 +203,20 @@ ErrorOr<void> CacheEntryWriter::flush(NonnullRefPtr<HeaderList> request_headers,
         return result.release_error();
     }
 
-    m_index.create_entry(m_cache_key, m_vary_key, m_url, move(request_headers), move(response_headers), m_cache_footer.data_size, m_request_time, m_response_time);
+    if (auto result = m_index.create_entry(m_cache_key, m_vary_key, m_url, move(request_headers), move(response_headers), m_cache_footer.data_size, m_request_time, m_response_time); result.is_error()) {
+        dbgln_if(HTTP_DISK_CACHE_DEBUG, "\033[36m[disk]\033[0m \033[31;1mUnable to flush cache entry for\033[0m {} ({} bytes): {}", m_url, m_cache_footer.data_size, result.error());
+        remove();
+
+        return result.release_error();
+    }
+
+    m_disk_cache.remove_entries_exceeding_cache_limit();
 
     dbgln_if(HTTP_DISK_CACHE_DEBUG, "\033[36m[disk]\033[0m \033[34;1mFinished caching\033[0m {} ({} bytes)", m_url, m_cache_footer.data_size);
     return {};
 }
 
-void CacheEntryWriter::on_network_error()
+void CacheEntryWriter::remove_incomplete_entry()
 {
     remove();
     close_and_destroy_cache_entry();

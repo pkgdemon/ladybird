@@ -25,9 +25,14 @@ Gfx::IntRect PaintInnerBoxShadow::bounding_rect() const
     return box_shadow_params.device_content_rect;
 }
 
+Gfx::IntRect DrawGlyphRun::bounding_rect() const
+{
+    return glyph_run->cached_blob_bounds().translated(translation).to_rounded<int>();
+}
+
 void DrawGlyphRun::dump(StringBuilder& builder) const
 {
-    builder.appendff(" rect={} translation={} color={} scale={}", rect, translation, color, scale);
+    builder.appendff(" rect={} translation={} color={}", rect, translation, color);
 }
 
 void FillRect::dump(StringBuilder& builder) const
@@ -99,7 +104,7 @@ void PaintInnerBoxShadow::dump(StringBuilder& builder) const
 
 void PaintTextShadow::dump(StringBuilder& builder) const
 {
-    builder.appendff(" shadow_rect={} text_rect={} draw_location={} blur_radius={} color={} scale={}", shadow_bounding_rect, text_rect, draw_location, blur_radius, color, glyph_run_scale);
+    builder.appendff(" shadow_rect={} text_rect={} draw_location={} blur_radius={} color={}", shadow_bounding_rect, text_rect, draw_location, blur_radius, color);
 }
 
 void FillRectWithRoundedCorners::dump(StringBuilder& builder) const
@@ -163,16 +168,6 @@ void PaintScrollBar::dump(StringBuilder&) const
 void ApplyEffects::dump(StringBuilder& builder) const
 {
     builder.appendff(" opacity={} has_filter={}", opacity, filter.has_value());
-}
-
-void ApplyTransform::dump(StringBuilder& builder) const
-{
-    auto affine_transform = extract_2d_affine_transform(matrix);
-    builder.appendff(" matrix={}", affine_transform);
-}
-
-void ApplyMaskBitmap::dump(StringBuilder&) const
-{
 }
 
 }

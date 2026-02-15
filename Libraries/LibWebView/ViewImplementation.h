@@ -16,6 +16,7 @@
 #include <AK/Utf16String.h>
 #include <LibCore/Forward.h>
 #include <LibCore/Promise.h>
+#include <LibCore/SharedVersion.h>
 #include <LibGfx/Cursor.h>
 #include <LibGfx/Forward.h>
 #include <LibHTTP/Header.h>
@@ -85,6 +86,10 @@ public:
     void set_preferred_color_scheme(Web::CSS::PreferredColorScheme);
     void set_preferred_contrast(Web::CSS::PreferredContrast);
     void set_preferred_motion(Web::CSS::PreferredMotion);
+
+    void notify_cookies_changed(HashTable<String> const& changed_domains, ReadonlySpan<HTTP::Cookie::Cookie>);
+    ErrorOr<Core::SharedVersionIndex> ensure_document_cookie_version_index(Badge<WebContentClient>, String const&);
+    Optional<Core::SharedVersion> document_cookie_version(URL::URL const&) const;
 
     ByteString selected_text();
     Optional<String> selected_text_with_whitespace_collapsed();
@@ -161,7 +166,7 @@ public:
     virtual void did_receive_screenshot(Badge<WebContentClient>, Gfx::ShareableBitmap const&);
 
     NonnullRefPtr<Core::Promise<String>> request_internal_page_info(PageInfoType);
-    void did_receive_internal_page_info(Badge<WebContentClient>, PageInfoType, String const&);
+    void did_receive_internal_page_info(Badge<WebContentClient>, PageInfoType, Optional<Core::AnonymousBuffer> const&);
 
     ErrorOr<LexicalPath> dump_gc_graph();
 
@@ -169,6 +174,8 @@ public:
     // Load Native.css as the User style sheet, which attempts to make WebView content look as close to
     // native GUI widgets as possible.
     void use_native_user_style_sheet();
+
+    void request_close();
 
     Function<void()> on_ready_to_paint;
     Function<String(Web::HTML::ActivateTab, Web::HTML::WebViewHints, Optional<u64>)> on_new_web_view;
@@ -332,6 +339,7 @@ protected:
     URL::URL m_context_menu_url;
 
     RefPtr<Action> m_open_image_action;
+    RefPtr<Action> m_save_image_action;
     RefPtr<Action> m_copy_image_action;
     Optional<Gfx::ShareableBitmap> m_image_context_menu_bitmap;
 
@@ -364,6 +372,9 @@ protected:
     size_t m_number_of_elements_playing_audio { 0 };
 
     Web::HTML::MuteState m_mute_state { Web::HTML::MuteState::Unmuted };
+
+    Core::AnonymousBuffer m_document_cookie_version_buffer;
+    HashMap<String, Core::SharedVersionIndex> m_document_cookie_version_indices;
 
     // FIXME: Reconcile this ID with `page_id`. The latter is only unique per WebContent connection, whereas the view ID
     //        is required to be globally unique for Firefox DevTools.

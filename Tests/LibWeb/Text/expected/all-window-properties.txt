@@ -369,6 +369,7 @@ ResizeObserverSize
 Response
 SVGAElement
 SVGAnimatedEnumeration
+SVGAnimatedInteger
 SVGAnimatedLength
 SVGAnimatedLengthList
 SVGAnimatedNumber
@@ -400,6 +401,7 @@ SVGFEMergeElement
 SVGFEMergeNodeElement
 SVGFEMorphologyElement
 SVGFEOffsetElement
+SVGFETurbulenceElement
 SVGFilterElement
 SVGForeignObjectElement
 SVGGElement
@@ -442,6 +444,7 @@ SVGViewElement
 Screen
 ScreenOrientation
 ScriptProcessorNode
+ScrollTimeline
 SecurityPolicyViolationEvent
 Selection
 Serial
@@ -559,6 +562,8 @@ XMLSerializer
 XPathEvaluator
 XPathExpression
 XPathResult
+XRSession
+XRSessionEvent
 XRSystem
 __finishTest
 __preventMultipleTestFunctions

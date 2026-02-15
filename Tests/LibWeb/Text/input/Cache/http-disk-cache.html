@@ -12,6 +12,7 @@
     const TEST_CACHE_RESPOND_WITH_NOT_MODIFIED = "X-Ladybird-Respond-With-Not-Modified";
 
     const ACCESS_CONTROL_ALLOW_HEADERS = [
+        "Cache-Control",
         "If-Modified-Since",
         "Range",
         TEST_CACHE_ENABLED_HEADER,
@@ -137,9 +138,9 @@
             expectCacheStatus(url, response, "not-cached");
         })();
 
-        // Responses with a no-store directive are not cached.
+        // Responses with a no-store Cache-Control directive are not cached.
         await (async () => {
-            url = await createRequest("/cache-test/no-store", {
+            url = await createRequest("/cache-test/response/no-store", {
                 headers: {
                     "Cache-Control": "no-store",
                 },
@@ -149,7 +150,36 @@
             expectCacheStatus(url, response, "not-cached");
         })();
 
-        // Requests with a no-store directive are not cached.
+        // Requests with a no-store Cache-Control directive are not cached.
+        await (async () => {
+            url = await createRequest("/cache-test/request/no-store", {
+                headers: {
+                    "Cache-Control": "max-age=999",
+                },
+            });
+
+            response = await cacheFetch(url, {
+                headers: {
+                    "Cache-Control": "no-store",
+                },
+            });
+            expectCacheStatus(url, response, "not-cached");
+
+            response = await cacheFetch(url);
+            expectCacheStatus(url, response, "written-to-cache");
+
+            response = await cacheFetch(url);
+            expectCacheStatus(url, response, "read-from-cache");
+
+            response = await cacheFetch(url, {
+                headers: {
+                    "Cache-Control": "no-store",
+                },
+            });
+            expectCacheStatus(url, response, "not-cached");
+        })();
+
+        // Requests with a no-store Fetch directive are not cached.
         await (async () => {
             url = await createRequest("/cache-test/cache-mode/no-store", {
                 headers: {
@@ -179,6 +209,7 @@
             url = await createRequest("/cache-test/cache-mode/reload", {
                 headers: {
                     "Cache-Control": "max-age=999",
+                    "Last-Modified": new Date().toUTCString(),
                 },
             });
 
@@ -219,7 +250,7 @@
 
         // Responses with only a max-age directive are cached.
         await (async () => {
-            url = await createRequest("/cache-test/max-age", {
+            url = await createRequest("/cache-test/response/max-age", {
                 headers: {
                     "Cache-Control": "max-age=5",
                 },
@@ -234,7 +265,7 @@
 
         // Responses with an age less than their max-age directive are cached.
         await (async () => {
-            url = await createRequest("/cache-test/max-age-fresh", {
+            url = await createRequest("/cache-test/response/max-age-fresh", {
                 headers: {
                     Age: "2",
                     "Cache-Control": "max-age=5",
@@ -250,7 +281,7 @@
 
         // Responses with an age equal to their max-age directive are not cached.
         await (async () => {
-            url = await createRequest("/cache-test/max-age-expired", {
+            url = await createRequest("/cache-test/response/max-age-expired", {
                 headers: {
                     Age: "5",
                     "Cache-Control": "max-age=5",
@@ -258,6 +289,146 @@
             });
 
             response = await cacheFetch(url);
+            expectCacheStatus(url, response, "not-cached");
+        })();
+
+        // Responses with an age less than the requests's max-age directive are cached.
+        await (async () => {
+            url = await createRequest("/cache-test/request/max-age-fresh", {
+                headers: {
+                    Age: "2",
+                    "Cache-Control": "max-age=999",
+                },
+            });
+
+            response = await cacheFetch(url);
+            expectCacheStatus(url, response, "written-to-cache");
+
+            response = await cacheFetch(url, {
+                headers: {
+                    "Cache-Control": "max-age=5",
+                },
+            });
+            expectCacheStatus(url, response, "read-from-cache");
+        })();
+
+        // Responses with an age equal to the request's max-age directive are not cached.
+        await (async () => {
+            url = await createRequest("/cache-test/request/max-age-expired", {
+                headers: {
+                    Age: "5",
+                    "Cache-Control": "max-age=999",
+                },
+            });
+
+            response = await cacheFetch(url, {
+                headers: {
+                    "Cache-Control": "max-age=5",
+                },
+            });
+            expectCacheStatus(url, response, "not-cached");
+        })();
+
+        // Responses with an age within the requests's max-stale directive are cached.
+        await (async () => {
+            url = await createRequest("/cache-test/request/max-stale-fresh", {
+                headers: {
+                    Age: "2",
+                    "Cache-Control": "max-age=5",
+                },
+            });
+
+            response = await cacheFetch(url);
+            expectCacheStatus(url, response, "written-to-cache");
+
+            response = await cacheFetch(url, {
+                headers: {
+                    "Cache-Control": "max-stale=5",
+                    [TEST_CACHE_REQUEST_TIME_OFFSET]: "5",
+                },
+            });
+            expectCacheStatus(url, response, "read-from-cache");
+        })();
+
+        // Responses with an age outside of the requests's max-stale directive are not cached.
+        await (async () => {
+            url = await createRequest("/cache-test/request/max-stale-expired", {
+                headers: {
+                    Age: "2",
+                    "Cache-Control": "max-age=5",
+                },
+            });
+
+            response = await cacheFetch(url);
+            expectCacheStatus(url, response, "written-to-cache");
+
+            response = await cacheFetch(url, {
+                headers: {
+                    "Cache-Control": "max-stale=5",
+                    [TEST_CACHE_REQUEST_TIME_OFFSET]: "10",
+                },
+            });
+            expectCacheStatus(url, response, "written-to-cache");
+        })();
+
+        // Requests with a valueluess max-stale directive are cached.
+        await (async () => {
+            url = await createRequest("/cache-test/request/max-stale-valueless", {
+                headers: {
+                    Age: "2",
+                    "Cache-Control": "max-age=5",
+                },
+            });
+
+            response = await cacheFetch(url);
+            expectCacheStatus(url, response, "written-to-cache");
+
+            response = await cacheFetch(url, {
+                headers: {
+                    "Cache-Control": "max-stale",
+                    [TEST_CACHE_REQUEST_TIME_OFFSET]: "60000",
+                },
+            });
+            expectCacheStatus(url, response, "read-from-cache");
+        })();
+
+        // Responses with an age within the requests's min-fresh directive are cached.
+        await (async () => {
+            url = await createRequest("/cache-test/request/min-fresh-fresh", {
+                headers: {
+                    Age: "2",
+                    "Cache-Control": "max-age=5",
+                },
+            });
+
+            response = await cacheFetch(url);
+            expectCacheStatus(url, response, "written-to-cache");
+
+            response = await cacheFetch(url, {
+                headers: {
+                    "Cache-Control": "min-fresh=2",
+                },
+            });
+            expectCacheStatus(url, response, "read-from-cache");
+        })();
+
+        // Responses with an age outside of the requests's min-fresh directive are not cached.
+        await (async () => {
+            url = await createRequest("/cache-test/request/min-fresh-expired", {
+                headers: {
+                    Age: "2",
+                    "Cache-Control": "max-age=5",
+                },
+            });
+
+            response = await cacheFetch(url);
+            expectCacheStatus(url, response, "written-to-cache");
+
+            response = await cacheFetch(url, {
+                headers: {
+                    "Cache-Control": "min-fresh=4",
+                },
+            });
             expectCacheStatus(url, response, "not-cached");
         })();
 
@@ -356,6 +527,33 @@
         // with an invalid revalidation attribute results in the cache being refreshed.
         await (async () => {
             url = await createRequest("/cache-test/expired-and-refreshed-due-to-invalid-revalidation-attributes", {
+                headers: {
+                    Age: "2",
+                    "Cache-Control": "max-age=5,must-revalidate",
+                    "Last-Modified": new Date().toUTCString().replace("GMT", "+0000"),
+                },
+            });
+
+            response = await cacheFetch(url);
+            expectCacheStatus(url, response, "written-to-cache");
+
+            response = await cacheFetch(url);
+            expectCacheStatus(url, response, "read-from-cache");
+
+            // By not attaching a TEST_CACHE_RESPOND_WITH_NOT_MODIFIED header, we tell http-test-server to respond to
+            // revalidation requests with an HTTP 200 (i.e. revalidation fails).
+            response = await cacheFetch(url, {
+                headers: {
+                    [TEST_CACHE_REQUEST_TIME_OFFSET]: "5",
+                },
+            });
+            expectCacheStatus(url, response, "written-to-cache");
+        })();
+
+        // Expired responses are cached until their max-age directive is reached. A must-revalidate cache directive
+        // with an unsuccessful revalidation results in the cache being refreshed.
+        await (async () => {
+            url = await createRequest("/cache-test/expired-and-refreshed-due-to-unsuccessful-revalidation", {
                 headers: {
                     Age: "2",
                     "Cache-Control": "max-age=5,must-revalidate",
@@ -473,9 +671,9 @@
             expectHttpStatus(url, response, 200);
         })();
 
-        // Responses with a no-cache directive must always be revalidated.
+        // Responses with a no-cache Cache-Control directive must always be revalidated.
         await (async () => {
-            url = await createRequest("/cache-test/no-cache", {
+            url = await createRequest("/cache-test/response/no-cache", {
                 headers: {
                     "Cache-Control": "no-cache",
                     "Last-Modified": new Date().toUTCString(),
@@ -495,6 +693,36 @@
             // By not attaching a TEST_CACHE_RESPOND_WITH_NOT_MODIFIED header, we tell http-test-server to respond to
             // revalidation requests with an HTTP 200 (i.e. revalidation fails).
             response = await cacheFetch(url);
+            expectCacheStatus(url, response, "written-to-cache");
+        })();
+
+        // Requests with a no-cache Cache-Control directive must always be revalidated.
+        await (async () => {
+            url = await createRequest("/cache-test/request/no-cache", {
+                headers: {
+                    "Cache-Control": "max-age=999",
+                    "Last-Modified": new Date().toUTCString(),
+                },
+            });
+
+            response = await cacheFetch(url);
+            expectCacheStatus(url, response, "written-to-cache");
+
+            response = await cacheFetch(url, {
+                headers: {
+                    "Cache-Control": "no-cache",
+                    [TEST_CACHE_RESPOND_WITH_NOT_MODIFIED]: "1",
+                },
+            });
+            expectCacheStatus(url, response, "read-from-cache");
+
+            // By not attaching a TEST_CACHE_RESPOND_WITH_NOT_MODIFIED header, we tell http-test-server to respond to
+            // revalidation requests with an HTTP 200 (i.e. revalidation fails).
+            response = await cacheFetch(url, {
+                headers: {
+                    "Cache-Control": "no-cache",
+                },
+            });
             expectCacheStatus(url, response, "written-to-cache");
         })();
 

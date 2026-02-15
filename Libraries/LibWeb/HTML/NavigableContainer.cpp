@@ -38,8 +38,11 @@ NavigableContainer::NavigableContainer(DOM::Document& document, DOM::QualifiedNa
     all_instances().set(this);
 }
 
-NavigableContainer::~NavigableContainer()
+NavigableContainer::~NavigableContainer() = default;
+
+void NavigableContainer::finalize()
 {
+    Base::finalize();
     all_instances().remove(this);
 }
 
@@ -294,6 +297,13 @@ void NavigableContainer::destroy_the_child_navigable()
     if (navigable->has_been_destroyed())
         return;
     navigable->set_has_been_destroyed();
+
+    // AD-HOC: Clear the navigable's "is delaying load events" flag.
+    //         This removes the DocumentLoadEventDelayer on the parent document that was
+    //         created when the navigable started loading (navigate algorithm step 15).
+    //         Without this, the delayer lingers until GC collects the Navigable, which can
+    //         block the parent document's load event indefinitely.
+    navigable->set_delaying_load_events(false);
 
     // 4. Inform the navigation API about child navigable destruction given navigable.
     navigable->inform_the_navigation_api_about_child_navigable_destruction();

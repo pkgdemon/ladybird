@@ -31,7 +31,7 @@ static inline bool is_table_column(Box const& box)
     return box.display().is_table_column();
 }
 
-CSSPixels TableFormattingContext::run_caption_layout(CSS::CaptionSide phase)
+CSSPixels TableFormattingContext::run_caption_layout(CSS::CaptionSide phase, AvailableSpace const& caption_available_space)
 {
     CSSPixels caption_height = 0;
     for (auto* child = table_box().first_child(); child; child = child->next_sibling()) {
@@ -42,11 +42,28 @@ CSSPixels TableFormattingContext::run_caption_layout(CSS::CaptionSide phase)
         // The caption boxes are principal block-level boxes that retain their own content, padding, margin, and border areas,
         // and are rendered as normal block boxes inside the table wrapper box, as described in https://www.w3.org/TR/CSS22/tables.html#model
         if (auto caption_context = create_independent_formatting_context_if_needed(m_state, m_layout_mode, child_box)) {
-            caption_context->run(*m_available_space);
+            caption_context->run(caption_available_space);
             // FIXME: If caption only has inline children, BlockFormattingContext doesn't resolve the vertical metrics.
             //        We need to do it manually here.
-            if (caption_context->type() == FormattingContext::Type::Block) {
-                static_cast<BlockFormattingContext&>(*caption_context).resolve_vertical_box_model_metrics(child_box, m_available_space->width.to_px_or_zero());
+            if (auto* block_context = as_if<BlockFormattingContext>(caption_context.ptr())) {
+                auto available_width = caption_available_space.width.to_px_or_zero();
+                block_context->resolve_vertical_box_model_metrics(child_box, available_width);
+                block_context->resolve_horizontal_box_model_metrics(child_box, available_width);
+
+                if (child_box.computed_values().width().is_auto()) {
+                    auto& caption_state = m_state.get_mutable(child_box);
+                    caption_state.set_content_width(available_width
+                        - caption_state.margin_left - caption_state.border_left - caption_state.padding_left
+                        - caption_state.padding_right - caption_state.border_right - caption_state.margin_right);
+
+                    // Adjust x offset so border-box aligns with the table wrapper.
+                    caption_state.set_content_x(caption_state.offset.x() + caption_state.border_left + caption_state.padding_left);
+                }
+
+                if (child_box.computed_values().height().is_auto()) {
+                    auto height = child_box.has_size_containment() ? 0 : caption_context->automatic_content_height();
+                    m_state.get_mutable(child_box).set_content_height(height);
+                }
             }
         }
 
@@ -390,6 +407,10 @@ void TableFormattingContext::compute_table_measures()
                     if (baseline_max_content_size != 0) {
                         cell_min_contribution += CSSPixels::nearest_value_for(rows_or_columns[rc_index].max_size / static_cast<double>(baseline_max_content_size))
                             * max(CSSPixels(0), cell_min_size<RowOrColumn>(cell) - baseline_max_content_size - baseline_border_spacing);
+                    } else {
+                        // AD-HOC: The spec does not define behavior when baseline is zero. We distribute equally.
+                        //         This matches how undefined ratios are handled elsewhere.
+                        cell_min_contribution += max(CSSPixels(0), cell_min_size<RowOrColumn>(cell) - baseline_border_spacing) / cell_span_value;
                     }
 
                     // The contribution of the cell is the sum of:
@@ -401,6 +422,10 @@ void TableFormattingContext::compute_table_measures()
                     if (baseline_max_content_size != 0) {
                         cell_max_contribution += CSSPixels::nearest_value_for(rows_or_columns[rc_index].max_size / static_cast<double>(baseline_max_content_size))
                             * max(CSSPixels(0), cell_max_size<RowOrColumn>(cell) - baseline_max_content_size - baseline_border_spacing);
+                    } else {
+                        // AD-HOC: The spec does not define behavior when baseline is zero. We distribute equally,
+                        //         This matches how undefined ratios are handled elsewhere.
+                        cell_max_contribution += max(CSSPixels(0), cell_max_size<RowOrColumn>(cell) - baseline_border_spacing) / cell_span_value;
                     }
                     cell_min_contributions_by_rc_index[rc_index].append(cell_min_contribution);
                     cell_max_contributions_by_rc_index[rc_index].append(cell_max_contribution);
@@ -1186,9 +1211,9 @@ void TableFormattingContext::position_cell_boxes()
         // - for top: the height reserved for top captions (including margins), if any
         // - the padding-left/padding-top and border-left-width/border-top-width of the table
         // FIXME: Account for visibility.
-        cell_state.offset = row_state.offset.translated(
+        cell_state.set_content_offset(row_state.offset.translated(
             cell_state.border_box_left() + m_columns[cell.column_index].left_offset + cell.column_index * border_spacing_horizontal(),
-            cell_state.border_box_top());
+            cell_state.border_box_top()));
     }
 }
 
@@ -1676,13 +1701,7 @@ void TableFormattingContext::parent_context_did_dimension_child_root_box()
         return TraversalDecision::Continue;
     });
 
-    for (auto& child : context_box().contained_abspos_children()) {
-        auto& box = as<Box>(*child);
-        auto& cb_state = m_state.get(*box.containing_block());
-        auto available_width = AvailableSize::make_definite(cb_state.content_width() + cb_state.padding_left + cb_state.padding_right);
-        auto available_height = AvailableSize::make_definite(cb_state.content_height() + cb_state.padding_top + cb_state.padding_bottom);
-        layout_absolutely_positioned_element(box, AvailableSpace(available_width, available_height));
-    }
+    layout_absolutely_positioned_children();
 }
 
 void TableFormattingContext::run(AvailableSpace const& available_space)
@@ -1690,13 +1709,18 @@ void TableFormattingContext::run(AvailableSpace const& available_space)
     FORMATTING_CONTEXT_TRACE();
     m_available_space = available_space;
 
-    auto total_captions_height = run_caption_layout(CSS::CaptionSide::Top);
-
     run_until_width_calculation(available_space);
 
     if (available_space.width.is_intrinsic_sizing_constraint() && !available_space.height.is_intrinsic_sizing_constraint()) {
         return;
     }
+
+    auto const& table_state = m_state.get(table_box());
+    auto caption_available_space = AvailableSpace(
+        AvailableSize::make_definite(table_state.border_box_width()),
+        available_space.height);
+
+    auto total_captions_height = run_caption_layout(CSS::CaptionSide::Top, caption_available_space);
 
     // Distribute the width of the table among columns.
     distribute_width_to_columns();
@@ -1710,7 +1734,7 @@ void TableFormattingContext::run(AvailableSpace const& available_space)
 
     m_state.get_mutable(table_box()).set_content_height(m_table_height);
 
-    total_captions_height += run_caption_layout(CSS::CaptionSide::Bottom);
+    total_captions_height += run_caption_layout(CSS::CaptionSide::Bottom, caption_available_space);
 
     // Table captions are positioned between the table margins and its borders (outside the grid box borders) as described in
     // https://www.w3.org/TR/css-tables-3/#bounding-box-assignment
@@ -1722,7 +1746,7 @@ void TableFormattingContext::run(AvailableSpace const& available_space)
 
 CSSPixels TableFormattingContext::automatic_content_width() const
 {
-    return greatest_child_width(context_box());
+    return m_state.get(table_box()).content_width();
 }
 
 CSSPixels TableFormattingContext::automatic_content_height() const
