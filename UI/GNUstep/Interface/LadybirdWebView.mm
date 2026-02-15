@@ -883,6 +883,8 @@ struct HideCursor {
         return;
     }
 
+    size_t dst_pitch = bitmap_size.width() * 4;
+
     auto* image_rep = [[NSBitmapImageRep alloc]
         initWithBitmapDataPlanes:nil
                       pixelsWide:bitmap_size.width()
@@ -892,16 +894,27 @@ struct HideCursor {
                         hasAlpha:YES
                         isPlanar:NO
                   colorSpaceName:NSDeviceRGBColorSpace
-                    bitmapFormat:(NSBitmapFormat)(NSBitmapFormatAlphaFirst | NSBitmapFormatThirtyTwoBitLittleEndian)
-                     bytesPerRow:bitmap.pitch()
+                    bitmapFormat:(NSBitmapFormat)0
+                     bytesPerRow:dst_pitch
                     bitsPerPixel:32];
 
-    memcpy([image_rep bitmapData], bitmap.scanline_u8(0), bitmap.pitch() * bitmap_size.height());
+    auto* dst = [image_rep bitmapData];
+    for (int y = 0; y < bitmap_size.height(); y++) {
+        auto* src_row = bitmap.scanline_u8(bitmap_size.height() - 1 - y);
+        auto* dst_row = dst + y * dst_pitch;
+
+        for (int x = 0; x < bitmap_size.width(); x++) {
+            size_t i = x * 4;
+            dst_row[i + 0] = src_row[i + 2];
+            dst_row[i + 1] = src_row[i + 1];
+            dst_row[i + 2] = src_row[i + 0];
+            dst_row[i + 3] = src_row[i + 3];
+        }
+    }
 
     auto* image = [[NSImage alloc] initWithSize:NSMakeSize(bitmap_size.width(), bitmap_size.height())];
     [image addRepresentation:image_rep];
 
-    // Draw the image
     auto inverse_device_pixel_ratio = m_web_view_bridge->inverse_device_pixel_ratio();
 
     NSRect image_rect = NSMakeRect(
