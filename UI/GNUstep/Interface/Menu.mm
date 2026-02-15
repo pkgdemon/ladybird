@@ -113,7 +113,6 @@ private:
     __weak id m_control { nil };
 };
 
-// GNUstep: Use Unicode characters instead of SF Symbols
 static void initialize_native_control(WebView::Action& action, id control)
 {
     switch (action.id()) {
@@ -303,8 +302,6 @@ NSButton* create_application_button(WebView::Action& action)
 
 void set_control_title(id control, NSString* title)
 {
-    // GNUstep: Set title for both menu items and buttons
-    // Unlike macOS, we use text labels instead of SF Symbol images
     if ([control isKindOfClass:[NSMenuItem class]]) {
         // For menu items, we prefix the action text with the icon
         NSString* current_title = [control title];

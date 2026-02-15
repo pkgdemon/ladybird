@@ -18,9 +18,6 @@ namespace Ladybird {
 
 bool is_using_dark_system_theme()
 {
-    // GNUstep: Check for dark theme via user defaults or environment
-    // GNUstep doesn't have appearance matching like macOS
-
     // Check environment variable first
     const char* theme = getenv("GNUSTEP_THEME");
     if (theme && strcasestr(theme, "dark") != nullptr) {
@@ -50,7 +47,6 @@ Core::AnonymousBuffer create_system_palette()
     auto palette = Gfx::Palette(move(palette_impl));
     palette.set_flag(Gfx::FlagRole::IsDark, is_dark);
 
-    // GNUstep: Use controlColor for accent color (may not be as accurate as macOS)
     palette.set_color(Gfx::ColorRole::Accent, ns_color_to_gfx_color([NSColor controlColor]));
 
     return theme;

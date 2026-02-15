@@ -95,9 +95,7 @@ struct HideCursor {
             screen_rects.unchecked_append(screen_rect);
         }
 
-        // GNUstep: Use 1.0 as default device pixel ratio (no HiDPI support yet)
         double device_pixel_ratio = 1.0;
-        // GNUstep: Use 60 fps as default
         u64 maximum_frames_per_second = 60;
 
         m_web_view_bridge = MUST(Ladybird::WebViewBridge::create(move(screen_rects), device_pixel_ratio, maximum_frames_per_second));
@@ -108,7 +106,6 @@ struct HideCursor {
         self.image_context_menu = Ladybird::create_context_menu(self, [self view].image_context_menu());
         self.media_context_menu = Ladybird::create_context_menu(self, [self view].media_context_menu());
 
-        // GNUstep: Register for file dragging
         [self registerForDraggedTypes:@[ NSFilenamesPboardType ]];
 
         m_modifier_flags = 0;
@@ -155,7 +152,6 @@ struct HideCursor {
 
 - (void)handleDevicePixelRatioChange
 {
-    // GNUstep: No HiDPI support, device pixel ratio is always 1.0
     m_web_view_bridge->set_device_pixel_ratio(1.0);
     [self updateViewportRect];
     [self updateStatusLabelPosition];
@@ -163,7 +159,6 @@ struct HideCursor {
 
 - (void)handleDisplayRefreshRateChange
 {
-    // GNUstep: No API for display refresh rate, use 60fps
     m_web_view_bridge->set_maximum_frames_per_second(60);
 }
 
@@ -372,7 +367,6 @@ struct HideCursor {
                     break;
                 case Gfx::StandardCursor::ResizeDiagonalTLBR:
                 case Gfx::StandardCursor::ResizeDiagonalBLTR:
-                    // GNUstep: No diagonal resize cursors, use arrow
                     [[NSCursor arrowCursor] set];
                     break;
                 case Gfx::StandardCursor::ResizeColumn:
@@ -516,16 +510,18 @@ struct HideCursor {
         auto* ns_message = Ladybird::string_to_ns_string(message);
         auto* ns_default = Ladybird::string_to_ns_string(default_);
 
-        auto* input = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 200, 24)];
+        __block auto* input = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 200, 24)];
         [input setStringValue:ns_default];
 
         self.dialog = [[NSAlert alloc] init];
         [[self.dialog addButtonWithTitle:@"OK"] setTag:NSModalResponseOK];
         [[self.dialog addButtonWithTitle:@"Cancel"] setTag:NSModalResponseCancel];
         [self.dialog setMessageText:ns_message];
-        [self.dialog setAccessoryView:input];
 
-        self.dialog.window.initialFirstResponder = input;
+        NSView* alert_content = [[self.dialog window] contentView];
+        NSRect content_bounds = [alert_content bounds];
+        [input setFrame:NSMakeRect(20, 10, content_bounds.size.width - 40, 24)];
+        [alert_content addSubview:input];
 
         [self.dialog beginSheetModalForWindow:[self window]
                             completionHandler:^(NSModalResponse response) {
@@ -540,19 +536,20 @@ struct HideCursor {
                             }];
     };
 
-    m_web_view_bridge->on_request_set_prompt_text = [weak_self](auto const& message) {
+    m_web_view_bridge->on_request_set_prompt_text = [weak_self](String const& message) {
         LadybirdWebView* self = weak_self;
-        if (self == nil) {
-            return;
-        }
-        if (self.dialog == nil || [self.dialog accessoryView] == nil) {
+        if (self == nil || self.dialog == nil) {
             return;
         }
 
-        auto* ns_message = Ladybird::string_to_ns_string(message);
-
-        auto* input = (NSTextField*)[self.dialog accessoryView];
-        [input setStringValue:ns_message];
+        NSView* alert_content = [[self.dialog window] contentView];
+        for (NSView* subview in [alert_content subviews]) {
+            if ([subview isKindOfClass:[NSTextField class]] && [(NSTextField*)subview isEditable]) {
+                auto* ns_message = Ladybird::string_to_ns_string(message);
+                [(NSTextField*)subview setStringValue:ns_message];
+                break;
+            }
+        }
     };
 
     m_web_view_bridge->on_request_accept_dialog = [weak_self]() {
@@ -561,8 +558,8 @@ struct HideCursor {
             return;
         }
 
-        [[self window] endSheet:[[self dialog] window]
-                     returnCode:NSModalResponseOK];
+        [NSApp endSheet:[[self dialog] window]
+             returnCode:NSModalResponseOK];
     };
 
     m_web_view_bridge->on_request_dismiss_dialog = [weak_self]() {
@@ -571,8 +568,8 @@ struct HideCursor {
             return;
         }
 
-        [[self window] endSheet:[[self dialog] window]
-                     returnCode:NSModalResponseCancel];
+        [NSApp endSheet:[[self dialog] window]
+             returnCode:NSModalResponseCancel];
     };
 
     m_web_view_bridge->on_request_color_picker = [weak_self](Color current_color) {
@@ -612,7 +609,6 @@ struct HideCursor {
             [panel setMessage:@"Select file"];
         }
 
-        // GNUstep: Use extension-based filtering instead of UTTypes
         NSMutableArray<NSString*>* allowed_extensions = [NSMutableArray array];
 
         for (auto const& filter : accepted_file_types.filters) {
@@ -631,7 +627,6 @@ struct HideCursor {
                     }
                 },
                 [&](Web::HTML::FileFilter::MimeType const&) {
-                    // GNUstep: MIME type filtering not well supported, skip
                 },
                 [&](Web::HTML::FileFilter::Extension const& filter) {
                     auto* ns_extension = Ladybird::string_to_ns_string(filter.value);
@@ -639,7 +634,6 @@ struct HideCursor {
                 });
         }
 
-        // GNUstep: setAllowedFileTypes instead of setAllowedContentTypes
         if ([allowed_extensions count] > 0) {
             [panel setAllowedFileTypes:allowed_extensions];
         }
@@ -676,7 +670,6 @@ struct HideCursor {
             return;
         }
         [self.select_dropdown removeAllItems];
-        self.select_dropdown.minimumWidth = minimum_width;
 
         auto add_menu_item = [self](Web::HTML::SelectItemOption const& item_option, bool in_option_group) {
             NSMenuItem* menuItem = [[NSMenuItem alloc]
@@ -773,10 +766,8 @@ struct HideCursor {
             return;
         }
 
-        // GNUstep: Toggle fullscreen if available
-        if ([[self window] respondsToSelector:@selector(toggleFullScreen:)]) {
-            [[self window] toggleFullScreen:nil];
-        }
+        auto frame = [[[self window] screen] frame];
+        [[self window] setFrame:frame display:YES];
 
         m_web_view_bridge->did_update_window_rect();
     };
@@ -786,9 +777,7 @@ struct HideCursor {
         if (self == nil) {
             return;
         }
-        // GNUstep: Set background color directly on the view
-        [self setWantsLayer:YES];
-        [[self layer] setBackgroundColor:[[Ladybird::gfx_color_to_ns_color(color) colorUsingColorSpaceName:NSDeviceRGBColorSpace] CGColor]];
+        [self setNeedsDisplay:YES];
     };
 
     m_web_view_bridge->on_find_in_page = [weak_self](auto current_match_index, auto const& total_match_count) {
@@ -826,9 +815,23 @@ struct HideCursor {
     m_web_view_bridge->select_dropdown_closed([data unsignedIntValue]);
 }
 
+- (void)menuWillOpen:(NSMenu*)menu
+{
+}
+
+- (void)menu:(NSMenu*)menu willHighlightItem:(NSMenuItem*)item
+{
+}
+
+- (NSRect)confinementRectForMenu:(NSMenu*)menu onScreen:(NSScreen*)screen
+{
+    return NSZeroRect;
+}
+
 - (void)menuDidClose:(NSMenu*)menu
 {
-    if (!menu.highlightedItem)
+    id<NSMenuView> menu_rep = [menu menuRepresentation];
+    if (menu_rep && [menu_rep highlightedItemIndex] < 0)
         m_web_view_bridge->select_dropdown_closed({});
 }
 
@@ -847,7 +850,11 @@ struct HideCursor {
 - (NSTextField*)status_label
 {
     if (!_status_label) {
-        _status_label = [NSTextField labelWithString:@""];
+        _status_label = [[NSTextField alloc] initWithFrame:NSZeroRect];
+        [_status_label setStringValue:@""];
+        [_status_label setEditable:NO];
+        [_status_label setSelectable:NO];
+        [_status_label setBezeled:NO];
         [_status_label setDrawsBackground:YES];
         [_status_label setBordered:YES];
         [_status_label setHidden:YES];
@@ -871,7 +878,6 @@ struct HideCursor {
     auto [bitmap, bitmap_size] = *paintable;
     VERIFY(bitmap.format() == Gfx::BitmapFormat::BGRA8888);
 
-    // GNUstep: Use NSBitmapImageRep for drawing
     auto* image_rep = [[NSBitmapImageRep alloc]
         initWithBitmapDataPlanes:nil
                       pixelsWide:bitmap_size.width()
@@ -881,7 +887,7 @@ struct HideCursor {
                         hasAlpha:YES
                         isPlanar:NO
                   colorSpaceName:NSDeviceRGBColorSpace
-                    bitmapFormat:NSBitmapFormatAlphaFirst | NSBitmapFormatThirtyTwoBitLittleEndian
+                    bitmapFormat:(NSBitmapFormat)(NSBitmapFormatAlphaFirst | NSBitmapFormatThirtyTwoBitLittleEndian)
                      bytesPerRow:bitmap.pitch()
                     bitsPerPixel:32];
 
@@ -892,7 +898,6 @@ struct HideCursor {
     [image addRepresentation:image_rep];
 
     // Draw the image
-    auto device_pixel_ratio = m_web_view_bridge->device_pixel_ratio();
     auto inverse_device_pixel_ratio = m_web_view_bridge->inverse_device_pixel_ratio();
 
     NSRect image_rect = NSMakeRect(

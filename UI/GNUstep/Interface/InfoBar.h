@@ -12,7 +12,6 @@
 
 @class GNUstepBrowserWindow;
 
-// GNUstep: Use NSView with manual layout instead of NSStackView
 @interface InfoBar : NSView
 
 - (void)showWithMessage:(NSString*)message

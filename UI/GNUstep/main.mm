@@ -38,8 +38,6 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
         auto* delegate = [[ApplicationDelegate alloc] init];
         [NSApp setDelegate:delegate];
 
-        // GNUstep: [NSApp run] doesn't trigger applicationDidFinishLaunching,
-        // so we call it manually before entering the run loop
         [delegate applicationDidFinishLaunching:nil];
     }
 

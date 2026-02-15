@@ -22,7 +22,6 @@ static constexpr CGFloat BUTTON_WIDTH = 30.0;
 static constexpr CGFloat SEARCH_FIELD_WIDTH = 200.0;
 static constexpr CGFloat MATCH_LABEL_WIDTH = 100.0;
 
-// GNUstep: Use NSView with manual layout instead of NSStackView
 @interface SearchPanel ()
 
 @property (nonatomic, strong) NSSearchField* search_field;
@@ -60,7 +59,7 @@ static constexpr CGFloat MATCH_LABEL_WIDTH = 100.0;
         // Create previous button
         self.previous_button = [[NSButton alloc] initWithFrame:NSZeroRect];
         [self.previous_button setTitle:@"\u25B2"]; // ▲
-        [self.previous_button setBezelStyle:NSBezelStyleRounded];
+        [self.previous_button setBezelStyle:NSRoundedBezelStyle];
         [self.previous_button setTarget:self];
         [self.previous_button setAction:@selector(findPreviousMatch:)];
         [self.previous_button setToolTip:@"Previous match"];
@@ -69,7 +68,7 @@ static constexpr CGFloat MATCH_LABEL_WIDTH = 100.0;
         // Create next button
         self.next_button = [[NSButton alloc] initWithFrame:NSZeroRect];
         [self.next_button setTitle:@"\u25BC"]; // ▼
-        [self.next_button setBezelStyle:NSBezelStyleRounded];
+        [self.next_button setBezelStyle:NSRoundedBezelStyle];
         [self.next_button setTarget:self];
         [self.next_button setAction:@selector(findNextMatch:)];
         [self.next_button setToolTip:@"Next match"];
@@ -78,14 +77,10 @@ static constexpr CGFloat MATCH_LABEL_WIDTH = 100.0;
         // Create done button
         self.done_button = [[NSButton alloc] initWithFrame:NSZeroRect];
         [self.done_button setTitle:@"Done"];
-        [self.done_button setBezelStyle:NSBezelStyleRounded];
+        [self.done_button setBezelStyle:NSRoundedBezelStyle];
         [self.done_button setTarget:self];
         [self.done_button setAction:@selector(hide:)];
         [self addSubview:self.done_button];
-
-        // Set background color
-        [self setWantsLayer:YES];
-        [[self layer] setBackgroundColor:[[NSColor colorWithCalibratedWhite:0.95 alpha:1.0] CGColor]];
     }
     return self;
 }

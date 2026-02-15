@@ -55,13 +55,11 @@ Optional<WebView::ViewImplementation&> Application::open_blank_new_tab(Web::HTML
     return [[tab web_view] view];
 }
 
-Optional<ByteString> Application::ask_user_for_download_folder() const
+Optional<ByteString> Application::ask_user_for_download_path(StringView file) const
 {
-    auto* panel = [NSOpenPanel openPanel];
-    [panel setAllowsMultipleSelection:NO];
-    [panel setCanChooseDirectories:YES];
-    [panel setCanChooseFiles:NO];
-    [panel setMessage:@"Select download directory"];
+    auto* panel = [NSSavePanel savePanel];
+    [panel setNameFieldStringValue:Ladybird::string_to_ns_string(file)];
+    [panel setTitle:@"Select save location"];
 
     if ([panel runModal] != NSModalResponseOK)
         return {};
@@ -162,7 +160,6 @@ void Application::insert_clipboard_entry(Web::Clipboard::SystemClipboardRepresen
         return;
 
     auto* paste_board = [NSPasteboard generalPasteboard];
-    // GNUstep: clearContents not available, use declareTypes instead
     [paste_board declareTypes:@[ pasteboard_type ] owner:nil];
 
     [paste_board setData:Ladybird::string_to_ns_data(entry.data)

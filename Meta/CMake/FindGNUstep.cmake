@@ -126,6 +126,20 @@ if(GNUstep_FOUND)
                 INTERFACE_LINK_LIBRARIES "${OBJC_LIBRARY}"
             )
         endif()
+        find_library(GNUSTEP_CURL_LIBRARY
+            NAMES curl
+            PATHS /usr/lib /usr/lib/${CMAKE_LIBRARY_ARCHITECTURE}
+            NO_CMAKE_FIND_ROOT_PATH
+            NO_CMAKE_ENVIRONMENT_PATH
+            NO_CMAKE_PATH
+            NO_SYSTEM_ENVIRONMENT_PATH
+            NO_CMAKE_SYSTEM_PATH
+        )
+        if(GNUSTEP_CURL_LIBRARY)
+            set_property(TARGET GNUstep::Base APPEND PROPERTY
+                INTERFACE_LINK_LIBRARIES "${GNUSTEP_CURL_LIBRARY}"
+            )
+        endif()
         cmake_path(GET GNUSTEP_BASE_LIBRARY PARENT_PATH _GNUSTEP_BASE_LIB_DIR)
         set_property(TARGET GNUstep::Base APPEND PROPERTY
             INTERFACE_LINK_DIRECTORIES "${_GNUSTEP_BASE_LIB_DIR}"

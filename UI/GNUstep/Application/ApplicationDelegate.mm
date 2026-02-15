@@ -12,6 +12,7 @@
 #import <Interface/LadybirdWebView.h>
 #import <Interface/Menu.h>
 #import <Interface/BrowserTab.h>
+#import <Interface/BrowserToolbar.h>
 #import <Interface/GNUstepBrowserWindow.h>
 #import <Utilities/Conversions.h>
 
@@ -355,7 +356,6 @@
     }
     self.hasFinishedLaunching = YES;
 
-    // GNUstep requires explicit app activation
     [NSApp activateIgnoringOtherApps:YES];
 
     auto const& browser_options = WebView::Application::browser_options();

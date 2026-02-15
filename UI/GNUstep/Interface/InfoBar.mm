@@ -42,12 +42,8 @@ static constexpr CGFloat BUTTON_WIDTH = 80.0;
         self.dismissButton = [[NSButton alloc] initWithFrame:NSZeroRect];
         [self.dismissButton setTarget:self];
         [self.dismissButton setAction:@selector(dismissButtonAction:)];
-        [self.dismissButton setBezelStyle:NSBezelStyleRounded];
+        [self.dismissButton setBezelStyle:NSRoundedBezelStyle];
         [self addSubview:self.dismissButton];
-
-        // Set background color
-        [self setWantsLayer:YES];
-        [[self layer] setBackgroundColor:[[NSColor colorWithCalibratedRed:0.95 green:0.95 blue:0.85 alpha:1.0] CGColor]];
     }
     return self;
 }

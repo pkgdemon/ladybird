@@ -255,16 +255,15 @@ void EventLoopManagerGNUstep::unregister_timer(intptr_t timer_id)
     auto& thread_data = ThreadData::the();
     thread_data.timer_id_allocator.deallocate(static_cast<int>(timer_id));
 
-    auto timer = thread_data.timers.take(static_cast<int>(timer_id));
-    VERIFY(timer.has_value());
-    [*timer invalidate];
+    auto it = thread_data.timers.find(static_cast<int>(timer_id));
+    VERIFY(it != thread_data.timers.end());
+    auto* timer = it->value;
+    thread_data.timers.remove(it);
+    [timer invalidate];
 }
 
 void EventLoopManagerGNUstep::register_notifier(Core::Notifier& notifier)
 {
-    // GNUstep: Use polling with a timer instead of NSFileHandle notifications.
-    // NSFileHandle notifications don't work well with sync IPC because they don't
-    // deliver nested notifications while inside a notification handler.
     auto weak_notifier = notifier.make_weak_ptr();
     int fd = notifier.fd();
     Core::Notifier::Type notifier_type = notifier.type();
@@ -369,7 +368,7 @@ size_t EventLoopImplementationGNUstep::pump(PumpMode mode)
 {
     auto* wait_until = mode == PumpMode::WaitForEvents ? [NSDate distantFuture] : [NSDate distantPast];
 
-    auto* event = [NSApp nextEventMatchingMask:NSEventMaskAny
+    auto* event = [NSApp nextEventMatchingMask:NSAnyEventMask
                                      untilDate:wait_until
                                         inMode:NSDefaultRunLoopMode
                                        dequeue:YES];
@@ -386,7 +385,7 @@ size_t EventLoopImplementationGNUstep::pump(PumpMode mode)
 
         [NSApp sendEvent:event];
 
-        event = [NSApp nextEventMatchingMask:NSEventMaskAny
+        event = [NSApp nextEventMatchingMask:NSAnyEventMask
                                    untilDate:nil
                                       inMode:NSDefaultRunLoopMode
                                      dequeue:YES];

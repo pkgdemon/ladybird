@@ -11,7 +11,6 @@
 
 #import <AppKit/AppKit.h>
 
-// GNUstep: Use NSView with manual layout instead of NSStackView
 @interface SearchPanel : NSView <NSTextFieldDelegate>
 
 - (void)find:(id)selector;

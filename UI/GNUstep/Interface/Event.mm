@@ -177,7 +177,6 @@ Web::MouseEvent ns_event_to_mouse_event(Web::MouseEvent::Type type, NSEvent* eve
             type = Web::MouseEvent::Type::DoubleClick;
         }
     } else if (type == Web::MouseEvent::Type::MouseWheel) {
-        // GNUstep: Use deltaX/deltaY with standard multiplier (no precise scrolling)
         static constexpr CGFloat imprecise_scroll_multiplier = 24;
         CGFloat delta_x = -[event deltaX] * imprecise_scroll_multiplier;
         CGFloat delta_y = -[event deltaY] * imprecise_scroll_multiplier;
@@ -213,7 +212,6 @@ Web::DragEvent ns_event_to_drag_event(Web::DragEvent::Type type, id<NSDraggingIn
     OwnPtr<DragData> browser_data;
 
     auto for_each_file = [&](auto callback) {
-        // GNUstep: Use propertyListForType with NSFilenamesPboardType
         NSArray* file_list = [[event draggingPasteboard] propertyListForType:NSFilenamesPboardType];
 
         for (NSString* file_path_str in file_list) {

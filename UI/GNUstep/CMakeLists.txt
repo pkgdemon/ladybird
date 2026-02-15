@@ -1,6 +1,5 @@
 # UI/GNUstep CMakeLists.txt
-# GNUstep-based UI implementation for Ladybird browser
-# Standalone implementation - no shared sources from AppKit
+# Standalone UI implementation for Ladybird browser - no shared sources from AppKit
 
 # Find GNUstep using our custom Find module
 find_package(GNUstep REQUIRED)
@@ -36,7 +35,6 @@ target_include_directories(ladybird_impl PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
 )
 
-# GNUstep requires specific compiler flags
 target_compile_options(ladybird_impl PUBLIC
     $<$<COMPILE_LANGUAGE:CXX>:-fobjc-arc>
     $<$<COMPILE_LANGUAGE:CXX>:-Wno-unused-parameter>
@@ -49,6 +47,7 @@ target_link_libraries(ladybird_impl PUBLIC
     GNUstep::GUI
     GNUstep::Base
     LibUnicode
+    BlocksRuntime
 )
 
 # Define GNUSTEP for preprocessor

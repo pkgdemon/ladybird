@@ -16,7 +16,6 @@ static NSString* const AUTOCOMPLETE_IDENTIFIER = @"Autocomplete";
 static constexpr auto MAX_NUMBER_OF_ROWS = 8uz;
 static constexpr auto PANEL_PADDING = 6uz;
 
-// GNUstep: Use NSPanel instead of NSPopover
 @interface Autocomplete ()
 {
     Vector<String> m_suggestions;
@@ -63,7 +62,6 @@ static constexpr auto PANEL_PADDING = 6uz;
         [self.table_view setIntercellSpacing:NSMakeSize(0, 5)];
         [self.table_view setHeaderView:nil];
         [self.table_view setRefusesFirstResponder:YES];
-        [self.table_view setRowSizeStyle:NSTableViewRowSizeStyleDefault];
         [self.table_view addTableColumn:column];
         [self.table_view setDataSource:self];
         [self.table_view setDelegate:self];
@@ -219,7 +217,7 @@ static constexpr auto PANEL_PADDING = 6uz;
     viewForTableColumn:(NSTableColumn*)table_column
                    row:(NSInteger)row
 {
-    NSTableCellView* view = [table_view makeViewWithIdentifier:AUTOCOMPLETE_IDENTIFIER owner:self];
+    NSTableCellView* view = (NSTableCellView*)[table_view makeViewWithIdentifier:AUTOCOMPLETE_IDENTIFIER owner:self];
 
     if (view == nil) {
         view = [[NSTableCellView alloc] initWithFrame:NSZeroRect];

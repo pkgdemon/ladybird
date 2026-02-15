@@ -18,7 +18,6 @@
 
 @end
 
-// GNUstep: Use NSPanel instead of NSPopover
 @interface Autocomplete : NSPanel <NSTableViewDataSource, NSTableViewDelegate>
 
 - (instancetype)init:(id<AutocompleteObserver>)observer
