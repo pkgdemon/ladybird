@@ -939,6 +939,14 @@ struct HideCursor {
     [self setWindowSize:window.size()];
 }
 
+- (void)setFrame:(NSRect)frame
+{
+    [super setFrame:frame];
+    if ([self window]) {
+        [self handleResize];
+    }
+}
+
 - (void)resizeWithOldSuperviewSize:(NSSize)oldSize
 {
     [super resizeWithOldSuperviewSize:oldSize];
