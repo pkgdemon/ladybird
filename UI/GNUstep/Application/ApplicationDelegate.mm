@@ -27,7 +27,7 @@
 
 @property (nonatomic, strong) InfoBar* info_bar;
 
-- (NSMenuItem*)createApplicationMenu;
+- (NSMenuItem*)createInfoMenu;
 - (NSMenuItem*)createFileMenu;
 - (NSMenuItem*)createEditMenu;
 - (NSMenuItem*)createViewMenu;
@@ -35,7 +35,6 @@
 - (NSMenuItem*)createInspectMenu;
 - (NSMenuItem*)createDebugMenu;
 - (NSMenuItem*)createWindowMenu;
-- (NSMenuItem*)createHelpMenu;
 
 @end
 
@@ -44,31 +43,37 @@
 - (instancetype)init
 {
     if (self = [super init]) {
-        [NSApp setMainMenu:[[NSMenu alloc] init]];
-
-        // Remove any automatic application menu items
-        while ([[NSApp mainMenu] numberOfItems] > 0) {
-            [[NSApp mainMenu] removeItemAtIndex:0];
-        }
-
-        [[NSApp mainMenu] addItem:[self createApplicationMenu]];
-        [[NSApp mainMenu] addItem:[self createFileMenu]];
-        [[NSApp mainMenu] addItem:[self createEditMenu]];
-        [[NSApp mainMenu] addItem:[self createViewMenu]];
-        [[NSApp mainMenu] addItem:[self createHistoryMenu]];
-        [[NSApp mainMenu] addItem:[self createInspectMenu]];
-        [[NSApp mainMenu] addItem:[self createDebugMenu]];
-        [[NSApp mainMenu] addItem:[self createWindowMenu]];
-        [[NSApp mainMenu] addItem:[self createHelpMenu]];
-
         self.browserWindow = nil;
         self.hasFinishedLaunching = NO;
 
-        // Reduce the tooltip delay
         [[NSUserDefaults standardUserDefaults] setObject:@100 forKey:@"NSInitialToolTipDelay"];
     }
 
     return self;
+}
+
+- (void)setupMainMenu
+{
+    auto* process_name = [[NSProcessInfo processInfo] processName];
+    auto* main_menu = [[NSMenu alloc] initWithTitle:process_name];
+
+    [main_menu addItem:[self createInfoMenu]];
+    [main_menu addItem:[self createFileMenu]];
+    [main_menu addItem:[self createEditMenu]];
+    [main_menu addItem:[self createViewMenu]];
+    [main_menu addItem:[self createHistoryMenu]];
+    [main_menu addItem:[self createInspectMenu]];
+    [main_menu addItem:[self createDebugMenu]];
+    [main_menu addItem:[self createWindowMenu]];
+
+    [main_menu addItem:[[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"Hide %@", process_name]
+                                                  action:@selector(hide:)
+                                           keyEquivalent:@"h"]];
+    [main_menu addItem:[[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"Quit %@", process_name]
+                                                  action:@selector(terminate:)
+                                           keyEquivalent:@"q"]];
+
+    [NSApp setMainMenu:main_menu];
 }
 
 #pragma mark - Public methods
@@ -139,27 +144,14 @@
     }
 }
 
-- (NSMenuItem*)createApplicationMenu
+- (NSMenuItem*)createInfoMenu
 {
-    auto* process_name = [[NSProcessInfo processInfo] processName];
-    auto* menu = [[NSMenuItem alloc] initWithTitle:process_name action:nil keyEquivalent:@""];
-
-    auto* submenu = [[NSMenu alloc] initWithTitle:process_name];
+    auto* menu = [[NSMenuItem alloc] initWithTitle:@"Info" action:nil keyEquivalent:@""];
+    auto* submenu = [[NSMenu alloc] initWithTitle:@"Info"];
 
     [submenu addItem:Ladybird::create_application_menu_item(WebView::Application::the().open_about_page_action())];
     [submenu addItem:[NSMenuItem separatorItem]];
-
     [submenu addItem:Ladybird::create_application_menu_item(WebView::Application::the().open_settings_page_action())];
-    [submenu addItem:[NSMenuItem separatorItem]];
-
-    [submenu addItem:[[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"Hide %@", process_name]
-                                                action:@selector(hide:)
-                                         keyEquivalent:@"h"]];
-    [submenu addItem:[NSMenuItem separatorItem]];
-
-    [submenu addItem:[[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"Quit %@", process_name]
-                                                action:@selector(terminate:)
-                                         keyEquivalent:@"q"]];
 
     [menu setSubmenu:submenu];
     return menu;
@@ -329,18 +321,7 @@
                                                 action:@selector(selectPreviousTab:)
                                          keyEquivalent:@"{"]];
 
-    [submenu addItem:[NSMenuItem separatorItem]];
-
     [NSApp setWindowsMenu:submenu];
-
-    [menu setSubmenu:submenu];
-    return menu;
-}
-
-- (NSMenuItem*)createHelpMenu
-{
-    auto* menu = [[NSMenuItem alloc] initWithTitle:@"Help" action:nil keyEquivalent:@""];
-    auto* submenu = [[NSMenu alloc] initWithTitle:@"Help"];
 
     [menu setSubmenu:submenu];
     return menu;
@@ -350,12 +331,12 @@
 
 - (void)applicationDidFinishLaunching:(NSNotification*)notification
 {
-    // Guard against being called multiple times
     if (self.hasFinishedLaunching) {
         return;
     }
     self.hasFinishedLaunching = YES;
 
+    [self setupMainMenu];
     [NSApp activateIgnoringOtherApps:YES];
 
     auto const& browser_options = WebView::Application::browser_options();
@@ -363,7 +344,6 @@
     if (browser_options.devtools_port.has_value())
         [self onDevtoolsEnabled];
 
-    // Create the main browser window with NSTabView
     self.browserWindow = [[GNUstepBrowserWindow alloc] init];
     [self.browserWindow makeKeyAndOrderFront:nil];
 
@@ -379,7 +359,6 @@
                 firstTab = newTab;
             }
         }
-        // Select the first tab
         if (firstTab) {
             [self.browserWindow selectTab:firstTab];
         }
@@ -392,7 +371,7 @@
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication*)sender
 {
-    return YES;
+    return NO;
 }
 
 - (void)applicationDidChangeScreenParameters:(NSNotification*)notification

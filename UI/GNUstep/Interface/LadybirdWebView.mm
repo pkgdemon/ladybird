@@ -468,7 +468,7 @@ struct HideCursor {
 
     m_web_view_bridge->on_request_alert = [weak_self](auto const& message) {
         LadybirdWebView* self = weak_self;
-        if (self == nil) {
+        if (self == nil || [self window] == nil) {
             return;
         }
         auto* ns_message = Ladybird::string_to_ns_string(message);
@@ -485,7 +485,7 @@ struct HideCursor {
 
     m_web_view_bridge->on_request_confirm = [weak_self](auto const& message) {
         LadybirdWebView* self = weak_self;
-        if (self == nil) {
+        if (self == nil || [self window] == nil) {
             return;
         }
         auto* ns_message = Ladybird::string_to_ns_string(message);
@@ -504,7 +504,7 @@ struct HideCursor {
 
     m_web_view_bridge->on_request_prompt = [weak_self](auto const& message, auto const& default_) {
         LadybirdWebView* self = weak_self;
-        if (self == nil) {
+        if (self == nil || [self window] == nil) {
             return;
         }
         auto* ns_message = Ladybird::string_to_ns_string(message);

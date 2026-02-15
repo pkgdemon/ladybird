@@ -18,6 +18,8 @@
 #    error "This project requires ARC"
 #endif
 
+static ApplicationDelegate* s_application_delegate;
+
 ErrorOr<int> ladybird_main(Main::Arguments arguments)
 {
     AK::set_rich_debug_enabled(true);
@@ -35,10 +37,8 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
             }
         }
 
-        auto* delegate = [[ApplicationDelegate alloc] init];
-        [NSApp setDelegate:delegate];
-
-        [delegate applicationDidFinishLaunching:nil];
+        s_application_delegate = [[ApplicationDelegate alloc] init];
+        [NSApp setDelegate:s_application_delegate];
     }
 
     return WebView::Application::the().execute();

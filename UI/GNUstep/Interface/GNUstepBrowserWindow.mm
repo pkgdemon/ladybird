@@ -298,6 +298,7 @@
 
 - (void)windowWillClose:(NSNotification*)notification
 {
+    [NSApp terminate:nil];
 }
 
 - (void)windowDidResize:(NSNotification*)notification
