@@ -878,6 +878,11 @@ struct HideCursor {
     auto [bitmap, bitmap_size] = *paintable;
     VERIFY(bitmap.format() == Gfx::BitmapFormat::BGRA8888);
 
+    if (bitmap_size.width() <= 0 || bitmap_size.height() <= 0) {
+        [super drawRect:rect];
+        return;
+    }
+
     auto* image_rep = [[NSBitmapImageRep alloc]
         initWithBitmapDataPlanes:nil
                       pixelsWide:bitmap_size.width()
@@ -891,8 +896,7 @@ struct HideCursor {
                      bytesPerRow:bitmap.pitch()
                     bitsPerPixel:32];
 
-    // Copy bitmap data
-    memcpy([image_rep bitmapData], bitmap.scanline_u8(0), bitmap.size_in_bytes());
+    memcpy([image_rep bitmapData], bitmap.scanline_u8(0), bitmap.pitch() * bitmap_size.height());
 
     auto* image = [[NSImage alloc] initWithSize:NSMakeSize(bitmap_size.width(), bitmap_size.height())];
     [image addRepresentation:image_rep];
