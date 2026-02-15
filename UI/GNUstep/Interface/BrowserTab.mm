@@ -133,8 +133,8 @@ static NSUInteger s_tab_counter = 0;
 
     self.title = Ladybird::string_to_ns_string(url.serialize());
     [self setLabel:self.title];
+    [self.browserWindow.tabView setNeedsDisplay:YES];
 
-    // Update toolbar if this is the active tab
     if ([self.browserWindow activeTab] == self) {
         [self.browserWindow.browserToolbar updateForTab:self];
     }
@@ -159,8 +159,8 @@ static NSUInteger s_tab_counter = 0;
 {
     self.title = Ladybird::utf16_string_to_ns_string(title);
     [self setLabel:self.title];
+    [self.browserWindow.tabView setNeedsDisplay:YES];
 
-    // Update window title if this is the active tab
     if ([self.browserWindow activeTab] == self) {
         [self.browserWindow setTitle:self.title];
     }

@@ -48,6 +48,7 @@ target_link_libraries(ladybird_impl PUBLIC
     GNUstep::Base
     LibUnicode
     BlocksRuntime
+    dispatch
 )
 
 # Define GNUSTEP for preprocessor

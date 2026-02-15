@@ -218,6 +218,7 @@ struct HideCursor {
             return;
         }
         [self setNeedsDisplay:YES];
+        [self displayIfNeeded];
     };
 
     m_web_view_bridge->on_new_web_view = [weak_self](auto activate_tab, auto, auto page_index) {

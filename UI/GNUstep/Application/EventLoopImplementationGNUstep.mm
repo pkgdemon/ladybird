@@ -19,6 +19,7 @@
 #import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
 
+#include <dispatch/dispatch.h>
 #include <signal.h>
 #include <sys/select.h>
 #include <sys/time.h>
@@ -65,7 +66,7 @@ struct ThreadData {
     HashMap<int, NSTimer*> timers;
     struct NotifierState {
         int fd { -1 };
-        NSTimer* timer { nil };
+        dispatch_source_t source { nullptr };
     };
     HashMap<Core::Notifier*, NotifierState> notifiers;
 };
@@ -268,38 +269,33 @@ void EventLoopManagerGNUstep::register_notifier(Core::Notifier& notifier)
     int fd = notifier.fd();
     Core::Notifier::Type notifier_type = notifier.type();
 
-    // Create a high-frequency timer to poll for data availability
-    auto* timer = [NSTimer scheduledTimerWithTimeInterval:0.001
-                                                  repeats:YES
-                                                    block:^(NSTimer* t) {
-                                                        auto notifier_ref = weak_notifier.strong_ref();
-                                                        if (!notifier_ref) {
-                                                            [t invalidate];
-                                                            return;
-                                                        }
+    dispatch_source_type_t source_type;
+    switch (notifier_type) {
+    case Core::Notifier::Type::Read:
+        source_type = DISPATCH_SOURCE_TYPE_READ;
+        break;
+    case Core::Notifier::Type::Write:
+        source_type = DISPATCH_SOURCE_TYPE_WRITE;
+        break;
+    default:
+        VERIFY_NOT_REACHED();
+        break;
+    }
 
-                                                        fd_set fds;
-                                                        FD_ZERO(&fds);
-                                                        FD_SET(fd, &fds);
+    dispatch_source_t source = dispatch_source_create(source_type, fd, 0, dispatch_get_main_queue());
 
-                                                        struct timeval tv = { 0, 0 };
+    dispatch_source_set_event_handler(source, ^{
+        auto notifier_ref = weak_notifier.strong_ref();
+        if (!notifier_ref) {
+            return;
+        }
+        Core::NotifierActivationEvent event;
+        notifier_ref->dispatch_event(event);
+    });
 
-                                                        int result = 0;
-                                                        if (notifier_type == Core::Notifier::Type::Read) {
-                                                            result = select(fd + 1, &fds, nullptr, nullptr, &tv);
-                                                        } else if (notifier_type == Core::Notifier::Type::Write) {
-                                                            result = select(fd + 1, nullptr, &fds, nullptr, &tv);
-                                                        }
+    dispatch_resume(source);
 
-                                                        if (result > 0 && FD_ISSET(fd, &fds)) {
-                                                            Core::NotifierActivationEvent event;
-                                                            notifier_ref->dispatch_event(event);
-                                                        }
-                                                    }];
-
-    [[NSRunLoop currentRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
-
-    ThreadData::the().notifiers.set(&notifier, { fd, timer });
+    ThreadData::the().notifiers.set(&notifier, { fd, source });
     notifier.set_owner_thread(s_thread_id);
 }
 
@@ -310,7 +306,8 @@ void EventLoopManagerGNUstep::unregister_notifier(Core::Notifier& notifier)
         return;
     auto state = thread_data->notifiers.take(&notifier);
     VERIFY(state.has_value());
-    [state->timer invalidate];
+    dispatch_source_cancel(state->source);
+    dispatch_release(state->source);
 }
 
 void EventLoopManagerGNUstep::did_post_event()
